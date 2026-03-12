@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ornament of Pressure</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    color: #ccc;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+  #controls {
+    width: 220px;
+    min-width: 220px;
+    padding: 24px 20px;
+    background: #0a0a0a;
+    border-right: 1px solid #1a1a1a;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+  #controls h1 {
+    font-size: 1em;
+    color: #fff;
+    border-bottom: 1px solid #222;
+    padding-bottom: 12px;
+    font-weight: 400;
+    letter-spacing: 0.05em;
+  }
+  .param-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .param-group label {
+    font-size: 0.78em;
+    color: #666;
+    display: flex;
+    justify-content: space-between;
+  }
+  .param-group label span { color: #fff; font-weight: 600; }
+  input[type="range"] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 3px;
+    background: #333;
+    border-radius: 2px;
+    outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px; height: 14px;
+    background: #fff;
+    border-radius: 50%;
+    cursor: pointer;
+  }
+  #canvas-wrap {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  canvas { display: block; }
+  #export-btn {
+    padding: 8px 12px;
+    background: #fff;
+    color: #000;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.8em;
+    margin-top: auto;
+  }
+  #export-btn:hover { background: #ccc; }
+</style>
+</head>
+<body>
+
+<div id="controls">
+  <h1>Ornament of Pressure</h1>
+
+  <div class="param-group">
+    <label>Scale <span id="v-scale">100</span></label>
+    <input type="range" id="scale" min="40" max="300" value="100">
+  </div>
+
+  <div class="param-group">
+    <label>Contact Angle <span id="v-angle">55</span>&deg;</label>
+    <input type="range" id="angle" min="5" max="75" value="55">
+  </div>
+
+  <button id="export-btn">Export SVG</button>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="canvas"></canvas>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const SQRT3 = Math.sqrt(3);
+
+// --- Equilateral triangle grid ---
+function triGrid(scale, w, h) {
+  // Basis vectors for equilateral triangle lattice
+  const e1x = scale, e1y = 0;
+  const e2x = scale / 2, e2y = scale * SQRT3 / 2;
+
+  const ni = Math.ceil(w / scale) + 6;
+  const nj = Math.ceil(h / (scale * SQRT3 / 2)) + 6;
+  const ox = w / 2 - (ni * e1x + nj * e2x) / 2;
+  const oy = h / 2 - (nj * e2y) / 2;
+
+  const v = (i, j) => ({
+    x: i * e1x + j * e2x + ox,
+    y: i * e1y + j * e2y + oy
+  });
+
+  const tris = [];
+  for (let i = 0; i <= ni; i++) {
+    for (let j = 0; j <= nj; j++) {
+      // Upward triangle
+      tris.push([v(i, j), v(i + 1, j), v(i, j + 1)]);
+      // Downward triangle
+      tris.push([v(i + 1, j), v(i + 1, j + 1), v(i, j + 1)]);
+    }
+  }
+  return tris;
+}
+
+// --- Hankin construction for one triangle ---
+function hankinTriangle(p0, p1, p2, contactAngle) {
+  const cx = (p0.x + p1.x + p2.x) / 3;
+  const cy = (p0.y + p1.y + p2.y) / 3;
+
+  const edges = [[p0, p1], [p1, p2], [p2, p0]];
+  const rays = [];
+
+  for (let e = 0; e < 3; e++) {
+    const [a, b] = edges[e];
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    const ea = Math.atan2(b.y - a.y, b.x - a.x);
+
+    // Determine inward-pointing perpendicular (toward centroid)
+    const perp = ea + Math.PI / 2;
+    const tx = mx + Math.cos(perp) * 0.01;
+    const ty = my + Math.sin(perp) * 0.01;
+    const inward = ((tx - cx) ** 2 + (ty - cy) ** 2) < ((mx - cx) ** 2 + (my - cy) ** 2)
+      ? perp : perp + Math.PI;
+
+    rays.push({ ox: mx, oy: my, dx: Math.cos(inward + contactAngle), dy: Math.sin(inward + contactAngle), e });
+    rays.push({ ox: mx, oy: my, dx: Math.cos(inward - contactAngle), dy: Math.sin(inward - contactAngle), e });
+  }
+
+  // Find nearest intersection of each ray with rays from other edges
+  const segs = [];
+  for (let i = 0; i < rays.length; i++) {
+    const r1 = rays[i];
+    let bestT = Infinity;
+    let bestPt = null;
+
+    for (let j = 0; j < rays.length; j++) {
+      if (rays[j].e === r1.e) continue;
+      const r2 = rays[j];
+
+      const denom = r1.dx * r2.dy - r1.dy * r2.dx;
+      if (Math.abs(denom) < 1e-10) continue;
+
+      const ex = r2.ox - r1.ox;
+      const ey = r2.oy - r1.oy;
+      const t = (ex * r2.dy - ey * r2.dx) / denom;
+      const u = (ex * r1.dy - ey * r1.dx) / denom;
+
+      if (t > 0.001 && u > 0.001 && t < bestT) {
+        bestT = t;
+        bestPt = { x: r1.ox + t * r1.dx, y: r1.oy + t * r1.dy };
+      }
+    }
+
+    if (bestPt) {
+      segs.push([{ x: r1.ox, y: r1.oy }, bestPt]);
+    }
+  }
+
+  return segs;
+}
+
+// --- Generate full pattern ---
+function generatePattern(scale, w, h, angleDeg) {
+  const tris = triGrid(scale, w, h);
+  const contactAngle = angleDeg * Math.PI / 180;
+  const allSegs = [];
+
+  for (const [p0, p1, p2] of tris) {
+    const segs = hankinTriangle(p0, p1, p2, contactAngle);
+    for (const s of segs) allSegs.push(s);
+  }
+
+  return allSegs;
+}
+
+// --- Draw ---
+function draw() {
+  const scale = +document.getElementById('scale').value;
+  const angleDeg = +document.getElementById('angle').value;
+
+  const w = canvas.parentElement.clientWidth;
+  const h = canvas.parentElement.clientHeight;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, w, h);
+
+  const segs = generatePattern(scale, w, h, angleDeg);
+
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.4;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  ctx.beginPath();
+  for (const [a, b] of segs) {
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+  }
+  ctx.stroke();
+}
+
+// --- Labels ---
+function updateLabels() {
+  document.getElementById('v-scale').textContent = document.getElementById('scale').value;
+  document.getElementById('v-angle').textContent = document.getElementById('angle').value;
+}
+
+// --- SVG export ---
+document.getElementById('export-btn').addEventListener('click', () => {
+  const scale = +document.getElementById('scale').value;
+  const angleDeg = +document.getElementById('angle').value;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+
+  const segs = generatePattern(scale, w, h, angleDeg);
+
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">\n`;
+  svg += `<rect width="100%" height="100%" fill="#000"/>\n`;
+  svg += `<g stroke="#fff" stroke-width="1.4" stroke-linecap="round" fill="none">\n`;
+
+  for (const [a, b] of segs) {
+    svg += `<line x1="${a.x.toFixed(2)}" y1="${a.y.toFixed(2)}" x2="${b.x.toFixed(2)}" y2="${b.y.toFixed(2)}"/>\n`;
+  }
+
+  svg += `</g>\n</svg>`;
+
+  const blob = new Blob([svg], { type: 'image/svg+xml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'ornament.svg';
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+// --- Events ---
+document.querySelectorAll('#controls input').forEach(el => {
+  el.addEventListener('input', () => { updateLabels(); draw(); });
+});
+window.addEventListener('resize', draw);
+updateLabels();
+draw();
+</script>
+</body>
+</html>
