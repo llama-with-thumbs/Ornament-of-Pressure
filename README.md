@@ -4,6 +4,8 @@ Real-time Islamic geometric ornament visualizer with audio reactivity.
 
 A native Windows C++ application that renders intricate Islamic geometric patterns using Hankin/PIC construction, star polygons, and multi-grid overlays — all reacting to live microphone input.
 
+![Screenshot](screenshot.png)
+
 ## Features
 
 - **6 distinct ornament presets** — 12-fold Mandala, Hexagonal, Square Kufic, Octagonal, Decagonal, Muqarnas
