@@ -9,9 +9,9 @@ static const float PI    = 3.14159265358979323846f;
 static const float SQRT3 = 1.7320508075688772f;
 static const int   FFT_N = 1024;
 static const int   NUM_ORNAMENTS = 6;
-static const int   THUMB_SIZE = 64;      // thumbnail pixel size
-static const int   SIDEBAR_W  = 86;      // sidebar width in pixels
-static const int   THUMB_PAD  = 8;       // padding between thumbnails
+static const int   THUMB_SIZE = 56;      // thumbnail pixel size
+static const int   SIDEBAR_W  = 130;     // sidebar width in pixels
+static const int   THUMB_PAD  = 16;      // padding between thumbnails (room for name text)
 
 // ============================================================
 // Color layers
@@ -29,13 +29,13 @@ enum Layer {
 
 struct LayerColor { float r, g, b; };
 static LayerColor baseColors[NUM_LAYERS] = {
-    { 1.00f, 0.82f, 0.28f },  // gold
-    { 1.00f, 0.95f, 0.85f },  // warm white
-    { 0.20f, 0.88f, 0.95f },  // teal
-    { 0.40f, 0.65f, 1.00f },  // bright blue
-    { 0.75f, 0.38f, 1.00f },  // purple
-    { 1.00f, 0.25f, 0.35f },  // crimson
-    { 0.95f, 0.32f, 0.78f },  // magenta
+    { 1.00f, 1.00f, 1.00f },  // white
+    { 0.85f, 0.85f, 0.85f },  // light gray
+    { 0.95f, 0.95f, 0.95f },  // near white
+    { 0.75f, 0.75f, 0.75f },  // medium gray
+    { 0.90f, 0.90f, 0.90f },  // off white
+    { 1.00f, 1.00f, 1.00f },  // white
+    { 0.65f, 0.65f, 0.65f },  // dim gray
 };
 
 // ============================================================
@@ -166,618 +166,479 @@ static void hexHankin(float sc,float cx,float cy,float maxR,float caDeg,std::vec
 }
 
 // ============================================================
-// Ornament 0: 12-fold Mandala (original)
+// Helpers for book-authentic constructions
+// ============================================================
+
+// Tiling helper: hex grid — calls fn(cx,cy) for each hex center within radius
+template<typename F>
+static void hexGrid(float sc,float cx,float cy,float maxR,F fn){
+    float colStep=sc*SQRT3,rowStep=sc*1.5f;
+    int cols=(int)ceilf(maxR*2/colStep)+3,rows=(int)ceilf(maxR*2/rowStep)+3;
+    for(int r=-rows;r<=rows;r++)for(int c=-cols;c<=cols;c++){
+        float hx=c*colStep+(r%2!=0?colStep*.5f:0)+cx;
+        float hy=r*rowStep+cy;
+        if(sqrtf((hx-cx)*(hx-cx)+(hy-cy)*(hy-cy))>maxR*1.2f)continue;
+        fn(hx,hy);
+    }
+}
+
+// Tiling helper: square grid — calls fn(cx,cy) for each cell center
+template<typename F>
+static void sqGrid(float sc,float cx,float cy,float maxR,float rot,F fn){
+    int n=(int)ceilf(maxR*2.5f/sc)+1;float h=n*sc*.5f;
+    float cR=cosf(rot),sR=sinf(rot);
+    for(int i=0;i<n;i++)for(int j=0;j<n;j++){
+        float lx=-h+(i+.5f)*sc,ly=-h+(j+.5f)*sc;
+        float px=lx*cR-ly*sR+cx,py=lx*sR+ly*cR+cy;
+        if(sqrtf((px-cx)*(px-cx)+(py-cy)*(py-cy))>maxR*1.2f)continue;
+        fn(px,py,lx,ly,cR,sR);
+    }
+}
+
+// Double triangle (Seal of Solomon) at hex midpoints — THE star-and-hexagon pattern (p.2-3)
+static void starHexPattern(float sc,float cx,float cy,float maxR,std::vector<Vec2>&s){
+    hexGrid(sc,cx,cy,maxR,[&](float hx,float hy){
+        // Draw two overlapping equilateral triangles (Seal of Solomon)
+        for(int t=0;t<2;t++){
+            float rot0=t*PI/6;  // 0° and 30°
+            for(int i=0;i<3;i++){
+                float a1=2*PI*i/3+rot0-PI/6, a2=2*PI*(i+1)/3+rot0-PI/6;
+                float r=sc*SQRT3/3;
+                s.push_back({hx+r*cosf(a1),hy+r*sinf(a1)});
+                s.push_back({hx+r*cosf(a2),hy+r*sinf(a2)});
+            }
+        }
+    });
+}
+
+// Breath of the Compassionate pattern (p.8-9) — stars and crosses from square grid
+static void breathPattern(float sc,float cx,float cy,float maxR,float breathe,std::vector<Vec2>&s){
+    // breathe: 0=standard, positive=stars expand, negative=contract
+    int n=(int)ceilf(maxR*2.5f/sc)+2;float h=n*sc*.5f;
+    // For each square cell, draw the khaātam (double square = 8-pointed star)
+    for(int i=-n;i<=n;i++)for(int j=-n;j<=n;j++){
+        float sx=cx+i*sc,sy=cy+j*sc;
+        if(sqrtf((sx-cx)*(sx-cx)+(sy-cy)*(sy-cy))>maxR*1.2f)continue;
+        float r=sc*.5f*(1.0f+breathe*.15f);
+        // Two overlapping squares at 45°
+        for(int q=0;q<2;q++){
+            float rot=q*PI/4;
+            for(int k=0;k<4;k++){
+                float a1=PI*k/2+PI/4+rot, a2=PI*(k+1)/2+PI/4+rot;
+                s.push_back({sx+r*cosf(a1),sy+r*sinf(a1)});
+                s.push_back({sx+r*cosf(a2),sy+r*sinf(a2)});
+            }
+        }
+    }
+}
+
+// Rosette construction (p.10-11): octagonal rosette with petals
+static void rosette8(float cx,float cy,float r,float rot,std::vector<Vec2>&s){
+    // Central 8-pointed star
+    float starR=r*.42f;
+    for(int i=0;i<8;i++){
+        float a1=2*PI*i/8+rot,a2=2*PI*((i+3)%8)/8+rot;
+        s.push_back({cx+starR*cosf(a1),cy+starR*sinf(a1)});
+        s.push_back({cx+starR*cosf(a2),cy+starR*sinf(a2)});
+    }
+    // Petals: kite shapes between star points and outer octagon
+    for(int i=0;i<8;i++){
+        float a=2*PI*i/8+rot;
+        float aL=a-PI/8, aR=a+PI/8;
+        // Outer point of petal
+        Vec2 outer={cx+r*cosf(a),cy+r*sinf(a)};
+        // Inner point (star tip)
+        Vec2 inner={cx+starR*.7f*cosf(a),cy+starR*.7f*sinf(a)};
+        // Side points
+        float sideR=r*.68f;
+        Vec2 left={cx+sideR*cosf(aL),cy+sideR*sinf(aL)};
+        Vec2 right={cx+sideR*cosf(aR),cy+sideR*sinf(aR)};
+        s.push_back(inner);s.push_back(left);
+        s.push_back(left);s.push_back(outer);
+        s.push_back(outer);s.push_back(right);
+        s.push_back(right);s.push_back(inner);
+    }
+    // Outer octagon
+    regPoly(cx,cy,r,8,rot+PI/8,s);
+}
+
+// Dodecagon-based 12-fold star (p.16-19): stars at midpoints of dodecagon edges
+static void dodecaStar(float cx,float cy,float r,float rot,std::vector<Vec2>&s){
+    // Regular dodecagon
+    Vec2 dv[12];
+    for(int i=0;i<12;i++){
+        float a=2*PI*i/12+rot;
+        dv[i]={cx+r*cosf(a),cy+r*sinf(a)};
+    }
+    // Dodecagon outline
+    for(int i=0;i<12;i++){s.push_back(dv[i]);s.push_back(dv[(i+1)%12]);}
+    // 12-pointed star from midpoints: two overlapping hexagons
+    Vec2 mid[12];
+    for(int i=0;i<12;i++){
+        mid[i]={(dv[i].x+dv[(i+1)%12].x)*.5f,(dv[i].y+dv[(i+1)%12].y)*.5f};
+    }
+    // Connect midpoints to form the 12-fold star
+    for(int i=0;i<12;i++){
+        s.push_back(mid[i]);s.push_back(mid[(i+5)%12]);
+    }
+    // Inner 12-pointed star
+    for(int i=0;i<12;i++){
+        s.push_back(mid[i]);s.push_back(mid[(i+4)%12]);
+    }
+}
+
+// Decagon-based 10-fold: Umm al-Girih (p.34-35)
+static void ummAlGirih(float cx,float cy,float r,float rot,std::vector<Vec2>&s){
+    // Regular decagon
+    Vec2 dv[10];
+    for(int i=0;i<10;i++){
+        float a=2*PI*i/10+rot;
+        dv[i]={cx+r*cosf(a),cy+r*sinf(a)};
+    }
+    // Decagon outline
+    for(int i=0;i<10;i++){s.push_back(dv[i]);s.push_back(dv[(i+1)%10]);}
+    // Stars from midpoints of decagon edges (the girih construction)
+    Vec2 mid[10];
+    for(int i=0;i<10;i++){
+        mid[i]={(dv[i].x+dv[(i+1)%10].x)*.5f,(dv[i].y+dv[(i+1)%10].y)*.5f};
+    }
+    // 10-pointed star: connect midpoints skipping 3
+    for(int i=0;i<10;i++){
+        s.push_back(mid[i]);s.push_back(mid[(i+3)%10]);
+    }
+    // Inner pentagons at corners
+    for(int i=0;i<10;i+=2){
+        float a=2*PI*i/10+rot;
+        float pr=r*.28f;
+        regPoly(cx+r*.78f*cosf(a),cy+r*.78f*sinf(a),pr,5,a,s);
+    }
+}
+
+// Khaātam (8-fold seal) for zillīj (p.26-29)
+static void khaatam(float cx,float cy,float r,float rot,std::vector<Vec2>&s){
+    // Octagram: connect every 3rd vertex of octagon ({8/3})
+    for(int i=0;i<8;i++){
+        float a1=2*PI*i/8+rot, a2=2*PI*((i+3)%8)/8+rot;
+        s.push_back({cx+r*cosf(a1),cy+r*sinf(a1)});
+        s.push_back({cx+r*cosf(a2),cy+r*sinf(a2)});
+    }
+    // Inner octagon connecting the star intersections
+    float ir=r*cosf(PI/8)/cosf(PI/8-PI*3/8)*cosf(PI/8); // intersection radius
+    ir=r*0.541f; // simplified: cos(pi/8)*tan(pi/8) ratio
+    regPoly(cx,cy,ir,8,rot+PI/8,s);
+    // Outer octagon
+    regPoly(cx,cy,r,8,rot+PI/8,s);
+}
+
+// ============================================================
+// Ornament 0: Star & Hexagon — Seal of Solomon (p.2-5)
 // ============================================================
 static void generateOrnament_0(float w, float h, float R0, float starDepth,
     float caDeg, float layerRot, std::vector<Vec2> layers[NUM_LAYERS])
 {
     float cx=w*.5f, cy=h*.5f;
-    float R1=R0*starDepth;
-    float a=R0*0.16f;
-    float modDist=R0*.78f, modW=R0*.24f, modH=R0*.40f, cham=modW*.35f;
-
-    auto inside=[&](float x,float y)->bool{
-        float dx=x-cx,dy=y-cy,r=sqrtf(dx*dx+dy*dy),th=atan2f(dy,dx);
-        if(r<R0+R1*cosf(12*th)+a*.4f)return true;
-        for(int k=0;k<4;k++){float rot=PI*.5f*k,cA=cosf(rot),sA=sinf(rot);
-            float lx=dx*cA+dy*sA,ly=-dx*sA+dy*cA;
-            if(lx>modDist-modH-a*.35f&&lx<modDist+modH+a*.35f&&fabsf(ly)<modW+a*.35f)return true;}
-        return false;};
-
-    auto clip=[&](std::vector<Vec2>&raw,std::vector<Vec2>&out){
-        for(size_t i=0;i+1<raw.size();i+=2)
-            if(inside(raw[i].x,raw[i].y)&&inside(raw[i+1].x,raw[i+1].y)){
-                out.push_back(raw[i]);out.push_back(raw[i+1]);}};
-
-    // ==========================================================
-    // L_STAR_BOUNDARY: multi-ring 12-fold star boundaries
-    // ==========================================================
-    {
-        auto&L=layers[L_STAR_BOUNDARY];
-        int SN=480;
-        // Primary 12-fold star
-        polarStar(cx,cy,R0,R1,12,SN,L);
-        // Secondary 12-fold ring
-        polarStar(cx,cy,R0*.58f,R1*.58f,12,SN,L);
-        // Tertiary 12-fold ring
-        polarStar(cx,cy,R0*.35f,R1*.35f,12,SN,L);
-        // Inner circle
-        regPoly(cx,cy,R0*.2f,SN,0,L);
-        // Outer decorative 24-fold ripple
-        polarStar(cx,cy,R0*.78f,R1*.15f,24,SN,L);
-        // 12-pointed star polygon {12/5} at primary radius
-        starPoly(cx,cy,R0*.92f,12,5,0,L);
-        // Inner {12/5}
-        starPoly(cx,cy,R0*.48f,12,5,PI/12,L);
-        // Tiny {12/5} at center
-        starPoly(cx,cy,R0*.15f,12,5,0,L);
-    }
-
-    // ==========================================================
-    // L_SPOKES: 12 + 24 radial axes
-    // ==========================================================
-    {
-        auto&L=layers[L_SPOKES];
-        // 12 primary spokes (as 6 diameters)
-        for(int k=0;k<6;k++){
-            float th=2*PI*k/12;
-            float rA=R0+R1*cosf(12*th),rB=R0+R1*cosf(12*(th+PI));
-            L.push_back({cx+rA*cosf(th),cy+rA*sinf(th)});
-            L.push_back({cx+rB*cosf(th+PI),cy+rB*sinf(th+PI)});}
-        // 12 secondary spokes (between primary, shorter)
-        for(int k=0;k<12;k++){
-            float th=2*PI*k/12+PI/12;
-            float rr=R0*.58f+R1*.58f*cosf(12*th);
-            L.push_back({cx+R0*.2f*cosf(th),cy+R0*.2f*sinf(th)});
-            L.push_back({cx+rr*cosf(th),cy+rr*sinf(th)});}
-        // Connecting arcs between spoke tips and star boundary
-        // (radial tick marks at each spoke intersection with secondary ring)
-        for(int k=0;k<12;k++){
-            float th=2*PI*k/12;
-            float r1=R0*.52f,r2=R0*.62f;
-            float da=PI/48;
-            L.push_back({cx+r1*cosf(th-da),cy+r1*sinf(th-da)});
-            L.push_back({cx+r2*cosf(th),cy+r2*sinf(th)});
-            L.push_back({cx+r2*cosf(th),cy+r2*sinf(th)});
-            L.push_back({cx+r1*cosf(th+da),cy+r1*sinf(th+da)});}
-    }
-
-    // ==========================================================
-    // L_GRID_MAIN: Hankin on square + triangle + hex grids
-    // ==========================================================
-    {
-        std::vector<Vec2> raw;raw.reserve(80000);
-        // Square grid at 0° and 45°
-        sqHankin(a,      cx,cy,R0*1.25f,caDeg,0,raw);
-        sqHankin(a,      cx,cy,R0*1.25f,caDeg,PI/4,raw);
-        // Additional square grid at 22.5° (creates 16-fold intersections)
-        sqHankin(a*1.2f, cx,cy,R0*1.0f, caDeg*.95f,PI/8,raw);
-        // Hexagonal Hankin layer (6-fold detail)
-        hexHankin(a*.9f, cx,cy,R0*.85f, caDeg*.85f,raw);
-        clip(raw,layers[L_GRID_MAIN]);
-    }
-
-    // ==========================================================
-    // L_GRID_FINE: multi-scale fine detail
-    // ==========================================================
-    {
-        std::vector<Vec2> raw;raw.reserve(40000);
-        // Fine square grid in center
-        sqHankin(a*.4f,  cx,cy,R0*.38f,caDeg*.9f,0,raw);
-        sqHankin(a*.4f,  cx,cy,R0*.38f,caDeg*.9f,PI/4,raw);
-        // Fine triangle grid (6-fold rosettes)
-        triHankin(a*.5f, cx,cy,R0*.4f, caDeg*.85f,raw);
-        // Micro detail at very center
-        sqHankin(a*.22f, cx,cy,R0*.18f,caDeg*.8f,0,raw);
-        sqHankin(a*.22f, cx,cy,R0*.18f,caDeg*.8f,PI/4,raw);
-        clip(raw,layers[L_GRID_FINE]);
-    }
-
-    // ==========================================================
-    // L_ROTATING: audio-reactive rotating layers
-    // ==========================================================
-    {
-        std::vector<Vec2> raw;raw.reserve(30000);
-        sqHankin(a*1.4f, cx,cy,R0*.9f, caDeg,layerRot,raw);
-        sqHankin(a*1.0f, cx,cy,R0*.6f, caDeg*.9f,layerRot*1.5f,raw);
-        // Rotating hex layer
-        hexHankin(a*1.2f,cx,cy,R0*.7f, caDeg*.8f,raw);
-        clip(raw,layers[L_ROTATING]);
-    }
-
-    // ==========================================================
-    // L_MODULES: module borders + internal structure
-    // ==========================================================
-    {
-        auto&L=layers[L_MODULES];
-        Vec2 baseP[8]={
-            {modDist-modH+cham,-modW},{modDist+modH-cham,-modW},
-            {modDist+modH,-modW+cham},{modDist+modH,modW-cham},
-            {modDist+modH-cham,modW},{modDist-modH+cham,modW},
-            {modDist-modH,modW-cham},{modDist-modH,-modW+cham}};
-
-        for(int k=0;k<4;k++){
-            float rot=PI*.5f*k,cA=cosf(rot),sA=sinf(rot);
-            float sCx=modDist*cA+cx,sCy=modDist*sA+cy;
-
-            // Rotate helper
-            auto rotV=[&](float x,float y)->Vec2{return{x*cA-y*sA+cx,x*sA+y*cA+cy};};
-
-            // Outer module border
-            Vec2 rP[8];
-            for(int i=0;i<8;i++) rP[i]=rotV(baseP[i].x,baseP[i].y);
-            for(int i=0;i<8;i++){L.push_back(rP[i]);L.push_back(rP[(i+1)%8]);}
-
-            // Inner border (75%)
-            Vec2 inner[8];
-            for(int i=0;i<8;i++){
-                float px=(baseP[i].x-modDist)*.75f+modDist,py=baseP[i].y*.75f;
-                inner[i]=rotV(px,py);}
-            for(int i=0;i<8;i++){L.push_back(inner[i]);L.push_back(inner[(i+1)%8]);}
-
-            // Innermost border (45%)
-            Vec2 inner2[8];
-            for(int i=0;i<8;i++){
-                float px=(baseP[i].x-modDist)*.45f+modDist,py=baseP[i].y*.45f;
-                inner2[i]=rotV(px,py);}
-            for(int i=0;i<8;i++){L.push_back(inner2[i]);L.push_back(inner2[(i+1)%8]);}
-
-            // Cross-hatching: connect outer vertices to star vertices
-            float r2=modW*.7f;
-            Vec2 s8[8];
-            for(int i=0;i<8;i++){float sa=2*PI*i/8+rot;
-                s8[i]={sCx+r2*cosf(sa),sCy+r2*sinf(sa)};}
-            for(int i=0;i<8;i++){L.push_back(rP[i]);L.push_back(s8[i%8]);}
-            // Also connect inner border to star
-            for(int i=0;i<8;i++){L.push_back(inner[i]);L.push_back(s8[i%8]);}
-
-            // Diamond lattice inside module
-            for(int i=0;i<8;i++){
-                L.push_back(rP[i]);L.push_back(inner[(i+1)%8]);
-                L.push_back(inner[i]);L.push_back(rP[(i+1)%8]);}
-
-            // Small circles at module tips
-            float tipX=modDist+modH*.85f,tipY=0;
-            Vec2 tp=rotV(tipX,tipY);
-            regPoly(tp.x,tp.y,modW*.18f,8,rot,L);
-            // Circle at inner end
-            float tipX2=modDist-modH*.75f,tipY2=0;
-            Vec2 tp2=rotV(tipX2,tipY2);
-            regPoly(tp2.x,tp2.y,modW*.15f,8,rot,L);
-        }
-
-        // Diagonal inter-module connectors (between adjacent arms)
-        for(int k=0;k<4;k++){
-            float th1=PI*.5f*k+PI/4; // midway between arms
-            float rd=R0*.65f;
-            float dth=PI/14;
-            Vec2 a1={cx+rd*cosf(th1-dth),cy+rd*sinf(th1-dth)};
-            Vec2 a2={cx+rd*cosf(th1+dth),cy+rd*sinf(th1+dth)};
-            Vec2 b1={cx+rd*1.15f*cosf(th1),cy+rd*1.15f*sinf(th1)};
-            Vec2 b2={cx+rd*.85f*cosf(th1),cy+rd*.85f*sinf(th1)};
-            L.push_back(a1);L.push_back(b1);
-            L.push_back(b1);L.push_back(a2);
-            L.push_back(a2);L.push_back(b2);
-            L.push_back(b2);L.push_back(a1);
-        }
-    }
-
-    // ==========================================================
-    // L_STARS8: {8/3} + {6/2} + {10/3} star polygons
-    // ==========================================================
-    {
-        auto&L=layers[L_STARS8];
-        for(int k=0;k<4;k++){
-            float rot=PI*.5f*k,cA=cosf(rot),sA=sinf(rot);
-            float sCx=modDist*cA+cx,sCy=modDist*sA+cy;
-            float r2=modW*.72f;
-
-            // Primary {8/3}
-            starPoly(sCx,sCy,r2,8,3,rot,L);
-            // Inner {8/3} rotated
-            starPoly(sCx,sCy,r2*.42f,8,3,rot+PI/8,L);
-            // Tiny {8/2} (octagram) at center of module
-            starPoly(sCx,sCy,r2*.2f,8,2,rot,L);
-            // Circumscribed octagon
-            regPoly(sCx,sCy,r2*.88f,8,rot+PI/8,L);
-        }
-
-        // {12/5} stars at diagonal positions (between modules)
-        for(int k=0;k<4;k++){
-            float th=PI*.5f*k+PI/4;
-            float rd=R0*.62f;
-            float sx=cx+rd*cosf(th),sy=cy+rd*sinf(th);
-            starPoly(sx,sy,a*.55f,12,5,th,L);
-            regPoly(sx,sy,a*.65f,12,th+PI/12,L);
-        }
-
-        // Ring of small {6/2} stars around center
-        for(int k=0;k<12;k++){
-            float th=2*PI*k/12;
-            float rd=R0*.38f;
-            float sx=cx+rd*cosf(th),sy=cy+rd*sinf(th);
-            starPoly(sx,sy,a*.32f,6,2,th,L);
-        }
-
-        // {10/3} stars at secondary ring intersections
-        for(int k=0;k<12;k++){
-            float th=2*PI*k/12+PI/12;
-            float rd=R0*.55f;
-            float sx=cx+rd*cosf(th),sy=cy+rd*sinf(th);
-            starPoly(sx,sy,a*.25f,10,3,th,L);
-        }
-    }
+    float sc=R0*0.16f;
+    // p.2-5: Star-and-hexagon (Seal of Solomon) on hex grid
+    // L_STAR_BOUNDARY: the hex grid star-and-hexagon pattern
+    starHexPattern(sc,cx,cy,R0*1.1f,layers[L_STAR_BOUNDARY]);
+    // L_SPOKES: 6 radial axes
+    { auto&L=layers[L_SPOKES];
+      for(int k=0;k<6;k++){float th=PI*k/3;
+        L.push_back({cx+sc*cosf(th),cy+sc*sinf(th)});
+        L.push_back({cx+R0*cosf(th),cy+R0*sinf(th)});}}
+    // L_GRID_MAIN: Hankin on hex grid (the substructure)
+    hexHankin(sc,cx,cy,R0*1.1f,caDeg,layers[L_GRID_MAIN]);
+    // L_GRID_FINE: finer triangle Hankin overlay
+    triHankin(sc*.6f,cx,cy,R0*.7f,caDeg*.85f,layers[L_GRID_FINE]);
+    // L_MODULES: concentric hexagonal rings (p.3 construction circles)
+    { auto&L=layers[L_MODULES];
+      for(int ring=1;ring<=4;ring++) regPoly(cx,cy,R0*ring*.24f,6,PI/6,L);
+      // Seal of Solomon at center, larger
+      starPoly(cx,cy,R0*.35f,6,2,0,L);
+      starPoly(cx,cy,R0*.35f,6,2,PI/6,L); }
+    // L_STARS8: {6/2} stars at hex vertices (p.3 bottom)
+    { auto&L=layers[L_STARS8];
+      hexGrid(sc*2,cx,cy,R0*.85f,[&](float hx,float hy){
+        starPoly(hx,hy,sc*.45f,6,2,0,L);});
+      starPoly(cx,cy,R0*.6f,12,5,0,L); }
+    // L_ROTATING: rotating hex Hankin layer
+    { std::vector<Vec2> raw;
+      hexHankin(sc*1.5f,cx,cy,R0*.85f,caDeg*.9f,raw);
+      float c=cosf(layerRot),s=sinf(layerRot);
+      for(auto&v:raw){float dx=v.x-cx,dy=v.y-cy;v.x=dx*c-dy*s+cx;v.y=dx*s+dy*c+cy;}
+      layers[L_ROTATING]=raw; }
 }
 
 // ============================================================
-// Ornament 1: Hexagonal Lattice (6-fold)
+// Ornament 1: Breath of the Compassionate (p.8-9)
 // ============================================================
 static void generateOrnament_1(float w, float h, float R0, float starDepth,
     float caDeg, float layerRot, std::vector<Vec2> layers[NUM_LAYERS])
 {
     float cx=w*.5f, cy=h*.5f;
-    float a=R0*0.14f;
-    (void)starDepth;
-
-    // L_STAR_BOUNDARY: concentric hexagonal rings
-    {
-        auto&L=layers[L_STAR_BOUNDARY];
-        for(int ring=1;ring<=5;ring++){
-            float r=R0*ring*.18f;
-            regPoly(cx,cy,r,6,PI/6,L);
-        }
-        polarStar(cx,cy,R0*.92f,R0*.08f,6,360,L);
-    }
-    // L_SPOKES: 6 radial spokes
-    {
-        auto&L=layers[L_SPOKES];
-        for(int k=0;k<6;k++){
-            float th=PI*k/3+PI/6;
-            L.push_back({cx,cy});
-            L.push_back({cx+R0*.92f*cosf(th),cy+R0*.92f*sinf(th)});
-        }
-    }
-    // L_GRID_MAIN: hexagonal Hankin tiling
-    {
-        std::vector<Vec2> raw;raw.reserve(60000);
-        hexHankin(a,cx,cy,R0*1.1f,caDeg,raw);
-        layers[L_GRID_MAIN]=raw;
-    }
-    // L_GRID_FINE: triangular Hankin overlay
-    {
-        std::vector<Vec2> raw;raw.reserve(40000);
-        triHankin(a*.7f,cx,cy,R0*.7f,caDeg*.85f,raw);
-        layers[L_GRID_FINE]=raw;
-    }
-    // L_MODULES: {6/2} stars at hex vertices
-    {
-        auto&L=layers[L_MODULES];
-        for(int ring=1;ring<=3;ring++){
-            float rd=R0*ring*.25f;
-            for(int k=0;k<6;k++){
-                float th=PI*k/3+PI/6;
-                float sx=cx+rd*cosf(th),sy=cy+rd*sinf(th);
-                starPoly(sx,sy,a*.6f,6,2,th,L);
-                regPoly(sx,sy,a*.75f,6,th+PI/6,L);
-            }
-        }
-    }
-    // L_STARS8: central rosette
-    {
-        auto&L=layers[L_STARS8];
-        starPoly(cx,cy,R0*.35f,12,5,0,L);
-        starPoly(cx,cy,R0*.2f,6,2,PI/6,L);
-        regPoly(cx,cy,R0*.4f,12,PI/12,L);
-    }
-    // L_ROTATING: rotating hex Hankin
-    {
-        std::vector<Vec2> raw;raw.reserve(20000);
-        hexHankin(a*1.5f,cx,cy,R0*.8f,caDeg*.9f,raw);
-        // manual rotate
-        float c=cosf(layerRot),s=sinf(layerRot);
-        for(auto&v:raw){float dx=v.x-cx,dy=v.y-cy;v.x=dx*c-dy*s+cx;v.y=dx*s+dy*c+cy;}
-        layers[L_ROTATING]=raw;
-    }
+    float sc=R0*0.14f;
+    // p.8-9: Stars and crosses from square grid (double square = khaātam)
+    // L_STAR_BOUNDARY: the breath pattern — expanding/contracting double squares
+    breathPattern(sc,cx,cy,R0*1.1f,starDepth,layers[L_STAR_BOUNDARY]);
+    // L_SPOKES: 4+4 radial axes
+    { auto&L=layers[L_SPOKES];
+      for(int k=0;k<8;k++){float th=PI*k/4;
+        L.push_back({cx+sc*cosf(th),cy+sc*sinf(th)});
+        L.push_back({cx+R0*.95f*cosf(th),cy+R0*.95f*sinf(th)});}}
+    // L_GRID_MAIN: Hankin on square grid at 0°
+    sqHankin(sc,cx,cy,R0*1.1f,caDeg,0,layers[L_GRID_MAIN]);
+    // L_GRID_FINE: Hankin on square grid at 45°
+    sqHankin(sc,cx,cy,R0*1.1f,caDeg,PI/4,layers[L_GRID_FINE]);
+    // L_MODULES: khaātam at key intersections (p.9 bottom)
+    { auto&L=layers[L_MODULES];
+      int n=(int)ceilf(R0/(sc*3))+1;
+      for(int i=-n;i<=n;i++)for(int j=-n;j<=n;j++){
+        float sx=cx+i*sc*3,sy=cy+j*sc*3;
+        if(sqrtf((sx-cx)*(sx-cx)+(sy-cy)*(sy-cy))>R0)continue;
+        khaatam(sx,sy,sc*.9f,0,L);}}
+    // L_STARS8: crosses between stars (p.9)
+    { auto&L=layers[L_STARS8];
+      int n=(int)ceilf(R0/(sc*3))+1;
+      for(int i=-n;i<=n;i++)for(int j=-n;j<=n;j++){
+        float sx=cx+(i+.5f)*sc*3,sy=cy+(j+.5f)*sc*3;
+        if(sqrtf((sx-cx)*(sx-cx)+(sy-cy)*(sy-cy))>R0)continue;
+        // Cross shape
+        float cr=sc*.6f;
+        for(int k=0;k<4;k++){float th=PI*k/2;
+          L.push_back({sx,sy});
+          L.push_back({sx+cr*cosf(th),sy+cr*sinf(th)});}
+        regPoly(sx,sy,sc*.45f,4,PI/4,L);}}
+    // L_ROTATING: rotating square Hankin
+    { std::vector<Vec2> raw;
+      sqHankin(sc*1.6f,cx,cy,R0*.85f,caDeg*.9f,layerRot,raw);
+      layers[L_ROTATING]=raw; }
 }
 
 // ============================================================
-// Ornament 2: Square Kufic / Rectilinear
+// Ornament 2: Eight-Fold Rosettes (p.10-11)
 // ============================================================
 static void generateOrnament_2(float w, float h, float R0, float starDepth,
     float caDeg, float layerRot, std::vector<Vec2> layers[NUM_LAYERS])
 {
     float cx=w*.5f, cy=h*.5f;
-    float a=R0*0.12f;
+    float sc=R0*0.18f;
     (void)starDepth;
-
-    // L_STAR_BOUNDARY: square boundary rings
-    {
-        auto&L=layers[L_STAR_BOUNDARY];
-        for(int ring=1;ring<=4;ring++){
-            float r=R0*ring*.22f;
-            regPoly(cx,cy,r,4,PI/4,L);
-            regPoly(cx,cy,r*.92f,4,0,L); // rotated 45°
-        }
-    }
-    // L_SPOKES: diagonal + axis lines
-    {
-        auto&L=layers[L_SPOKES];
-        for(int k=0;k<4;k++){
-            float th=PI*k/4;
-            L.push_back({cx+R0*.15f*cosf(th),cy+R0*.15f*sinf(th)});
-            L.push_back({cx+R0*.88f*cosf(th),cy+R0*.88f*sinf(th)});
-        }
-    }
-    // L_GRID_MAIN: dense square Hankin at 0°
-    {
-        std::vector<Vec2> raw;raw.reserve(60000);
-        sqHankin(a,cx,cy,R0*1.1f,caDeg,0,raw);
-        layers[L_GRID_MAIN]=raw;
-    }
-    // L_GRID_FINE: overlaid 45° square Hankin
-    {
-        std::vector<Vec2> raw;raw.reserve(60000);
-        sqHankin(a,cx,cy,R0*1.1f,caDeg,PI/4,raw);
-        layers[L_GRID_FINE]=raw;
-    }
-    // L_MODULES: {8/3} stars at grid intersections
-    {
-        auto&L=layers[L_MODULES];
-        for(int i=-3;i<=3;i++)for(int j=-3;j<=3;j++){
-            float sx=cx+i*a*2.5f,sy=cy+j*a*2.5f;
-            float d=sqrtf((sx-cx)*(sx-cx)+(sy-cy)*(sy-cy));
-            if(d>R0*.9f)continue;
-            starPoly(sx,sy,a*.7f,8,3,0,L);
-        }
-    }
-    // L_STARS8: larger {8/2} at corners
-    {
-        auto&L=layers[L_STARS8];
-        float pos[]={-1,-1, 1,-1, 1,1, -1,1};
-        for(int k=0;k<4;k++){
-            float sx=cx+pos[k*2]*R0*.55f,sy=cy+pos[k*2+1]*R0*.55f;
-            starPoly(sx,sy,a*1.2f,8,2,PI/8,L);
-            regPoly(sx,sy,a*1.4f,8,0,L);
-        }
-        starPoly(cx,cy,R0*.25f,8,3,0,L);
-    }
+    // p.10-11: Octagonal rosettes with petals on square grid
+    // L_STAR_BOUNDARY: rosettes at grid points
+    { auto&L=layers[L_STAR_BOUNDARY];
+      int n=(int)ceilf(R0/(sc*2.5f))+1;
+      for(int i=-n;i<=n;i++)for(int j=-n;j<=n;j++){
+        float sx=cx+i*sc*2.5f,sy=cy+j*sc*2.5f;
+        if(sqrtf((sx-cx)*(sx-cx)+(sy-cy)*(sy-cy))>R0*1.1f)continue;
+        rosette8(sx,sy,sc*1.1f,0,L);}}
+    // L_SPOKES: 8 radial
+    { auto&L=layers[L_SPOKES];
+      for(int k=0;k<8;k++){float th=PI*k/4;
+        L.push_back({cx+sc*cosf(th),cy+sc*sinf(th)});
+        L.push_back({cx+R0*.95f*cosf(th),cy+R0*.95f*sinf(th)});}}
+    // L_GRID_MAIN: Hankin 0° + 45°
+    { std::vector<Vec2> raw;
+      sqHankin(sc,cx,cy,R0*1.1f,caDeg,0,raw);
+      sqHankin(sc,cx,cy,R0*1.1f,caDeg,PI/4,raw);
+      layers[L_GRID_MAIN]=raw; }
+    // L_GRID_FINE: fine detail at 22.5°
+    sqHankin(sc*.5f,cx,cy,R0*.5f,caDeg*.9f,PI/8,layers[L_GRID_FINE]);
+    // L_MODULES: octagonal frames at half-grid offsets
+    { auto&L=layers[L_MODULES];
+      int n=(int)ceilf(R0/(sc*2.5f))+1;
+      for(int i=-n;i<=n;i++)for(int j=-n;j<=n;j++){
+        float sx=cx+(i+.5f)*sc*2.5f,sy=cy+(j+.5f)*sc*2.5f;
+        if(sqrtf((sx-cx)*(sx-cx)+(sy-cy)*(sy-cy))>R0)continue;
+        regPoly(sx,sy,sc*.7f,8,PI/8,L);
+        starPoly(sx,sy,sc*.5f,8,3,0,L);}}
+    // L_STARS8: small {8/2} at rosette centers
+    { auto&L=layers[L_STARS8];
+      int n=(int)ceilf(R0/(sc*2.5f))+1;
+      for(int i=-n;i<=n;i++)for(int j=-n;j<=n;j++){
+        float sx=cx+i*sc*2.5f,sy=cy+j*sc*2.5f;
+        if(sqrtf((sx-cx)*(sx-cx)+(sy-cy)*(sy-cy))>R0*1.05f)continue;
+        starPoly(sx,sy,sc*.35f,8,2,PI/8,L);}}
     // L_ROTATING
-    {
-        std::vector<Vec2> raw;raw.reserve(30000);
-        sqHankin(a*1.8f,cx,cy,R0*.85f,caDeg*.9f,layerRot,raw);
-        layers[L_ROTATING]=raw;
-    }
+    { std::vector<Vec2> raw;
+      sqHankin(sc*1.8f,cx,cy,R0*.8f,caDeg*.85f,layerRot,raw);
+      layers[L_ROTATING]=raw; }
 }
 
 // ============================================================
-// Ornament 3: 8-fold Star (Octagonal)
+// Ornament 3: Six of One / Three Times Four — 12-fold (p.16-19)
 // ============================================================
 static void generateOrnament_3(float w, float h, float R0, float starDepth,
     float caDeg, float layerRot, std::vector<Vec2> layers[NUM_LAYERS])
 {
     float cx=w*.5f, cy=h*.5f;
-    float a=R0*0.15f;
-    float R1=R0*starDepth;
-
-    // L_STAR_BOUNDARY: 8-fold polar star
-    {
-        auto&L=layers[L_STAR_BOUNDARY];
-        polarStar(cx,cy,R0,R1,8,480,L);
-        polarStar(cx,cy,R0*.6f,R1*.5f,8,480,L);
-        regPoly(cx,cy,R0*.25f,8,PI/8,L);
-        starPoly(cx,cy,R0*.85f,8,3,0,L);
-    }
-    // L_SPOKES: 8 radial lines
-    {
-        auto&L=layers[L_SPOKES];
-        for(int k=0;k<8;k++){
-            float th=2*PI*k/8;
-            float rr=R0+R1*cosf(8*th);
-            L.push_back({cx+R0*.2f*cosf(th),cy+R0*.2f*sinf(th)});
-            L.push_back({cx+rr*cosf(th),cy+rr*sinf(th)});
-        }
-    }
-    // L_GRID_MAIN: sq Hankin 0° and 45°
-    {
-        std::vector<Vec2> raw;raw.reserve(60000);
-        sqHankin(a,cx,cy,R0*1.2f,caDeg,0,raw);
-        sqHankin(a,cx,cy,R0*1.2f,caDeg,PI/4,raw);
-        layers[L_GRID_MAIN]=raw;
-    }
-    // L_GRID_FINE: fine 22.5° grid
-    {
-        std::vector<Vec2> raw;raw.reserve(30000);
-        sqHankin(a*.6f,cx,cy,R0*.5f,caDeg*.9f,PI/8,raw);
-        layers[L_GRID_FINE]=raw;
-    }
-    // L_MODULES: octagonal frames
-    {
-        auto&L=layers[L_MODULES];
-        for(int ring=1;ring<=3;ring++){
-            float rd=R0*ring*.28f;
-            for(int k=0;k<8;k++){
-                float th=2*PI*k/8;
-                float sx=cx+rd*cosf(th),sy=cy+rd*sinf(th);
-                regPoly(sx,sy,a*.5f,8,th,L);
-            }
-        }
-    }
-    // L_STARS8: {8/3} constellation
-    {
-        auto&L=layers[L_STARS8];
-        starPoly(cx,cy,R0*.45f,8,3,0,L);
-        for(int k=0;k<8;k++){
-            float th=2*PI*k/8+PI/8;
-            float sx=cx+R0*.65f*cosf(th),sy=cy+R0*.65f*sinf(th);
-            starPoly(sx,sy,a*.55f,8,3,th,L);
-        }
-    }
+    float sc=R0*0.16f;
+    (void)starDepth;
+    // p.16-19: 12-fold stars from dodecagons + hexagons + squares
+    // L_STAR_BOUNDARY: dodecagonal stars at hex grid points
+    { auto&L=layers[L_STAR_BOUNDARY];
+      hexGrid(sc*3.5f,cx,cy,R0*1.1f,[&](float hx,float hy){
+        dodecaStar(hx,hy,sc*1.6f,0,L);});}
+    // L_SPOKES: 12 radial axes
+    { auto&L=layers[L_SPOKES];
+      for(int k=0;k<12;k++){float th=2*PI*k/12;
+        L.push_back({cx+sc*cosf(th),cy+sc*sinf(th)});
+        L.push_back({cx+R0*.95f*cosf(th),cy+R0*.95f*sinf(th)});}}
+    // L_GRID_MAIN: hex Hankin
+    hexHankin(sc*1.2f,cx,cy,R0*1.1f,caDeg,layers[L_GRID_MAIN]);
+    // L_GRID_FINE: triangle Hankin overlay
+    triHankin(sc*.7f,cx,cy,R0*.7f,caDeg*.85f,layers[L_GRID_FINE]);
+    // L_MODULES: hexagonal frames between dodecagons
+    { auto&L=layers[L_MODULES];
+      hexGrid(sc*3.5f,cx,cy,R0,[&](float hx,float hy){
+        regPoly(hx,hy,sc*1.75f,6,PI/6,L);
+        regPoly(hx,hy,sc*1.3f,6,0,L);
+        // Small squares between dodecagons
+        for(int k=0;k<6;k++){float th=PI*k/3+PI/6;
+          float sx=hx+sc*2.4f*cosf(th),sy=hy+sc*2.4f*sinf(th);
+          regPoly(sx,sy,sc*.4f,4,PI/4,L);}});
+      // Central {12/5}
+      starPoly(cx,cy,R0*.4f,12,5,0,L); }
+    // L_STARS8: {6/2} between dodecagons
+    { auto&L=layers[L_STARS8];
+      hexGrid(sc*3.5f,cx,cy,R0*.9f,[&](float hx,float hy){
+        for(int k=0;k<6;k++){float th=PI*k/3+PI/6;
+          float sx=hx+sc*2.0f*cosf(th),sy=hy+sc*2.0f*sinf(th);
+          starPoly(sx,sy,sc*.5f,6,2,th,L);}});
+      starPoly(cx,cy,R0*.25f,12,5,PI/12,L); }
     // L_ROTATING
-    {
-        std::vector<Vec2> raw;raw.reserve(20000);
-        sqHankin(a*1.3f,cx,cy,R0*.75f,caDeg*.85f,layerRot,raw);
-        layers[L_ROTATING]=raw;
-    }
+    { std::vector<Vec2> raw;
+      hexHankin(sc*2.0f,cx,cy,R0*.85f,caDeg*.8f,raw);
+      float c=cosf(layerRot),s=sinf(layerRot);
+      for(auto&v:raw){float dx=v.x-cx,dy=v.y-cy;v.x=dx*c-dy*s+cx;v.y=dx*s+dy*c+cy;}
+      layers[L_ROTATING]=raw; }
 }
 
 // ============================================================
-// Ornament 4: 10-fold Decagonal
+// Ornament 4: Umm al-Girih — 10-fold (p.34-37)
 // ============================================================
 static void generateOrnament_4(float w, float h, float R0, float starDepth,
     float caDeg, float layerRot, std::vector<Vec2> layers[NUM_LAYERS])
 {
     float cx=w*.5f, cy=h*.5f;
-    float a=R0*0.14f;
+    float sc=R0*0.15f;
     float R1=R0*starDepth;
-
-    // L_STAR_BOUNDARY: 10-fold star
-    {
-        auto&L=layers[L_STAR_BOUNDARY];
-        polarStar(cx,cy,R0,R1,10,500,L);
-        polarStar(cx,cy,R0*.55f,R1*.45f,10,500,L);
-        starPoly(cx,cy,R0*.88f,10,3,0,L);
-        starPoly(cx,cy,R0*.5f,10,4,PI/10,L);
-    }
+    // p.34-37: "Mother of patterns" — decagons edge-to-edge with bowtie hexagons
+    // L_STAR_BOUNDARY: decagonal stars (Umm al-Girih construction)
+    { auto&L=layers[L_STAR_BOUNDARY];
+      // Central large decagon star
+      ummAlGirih(cx,cy,R0*.65f,0,L);
+      // Ring of smaller decagons
+      for(int k=0;k<10;k++){float th=2*PI*k/10;
+        float d=R0*.78f;
+        ummAlGirih(cx+d*cosf(th),cy+d*sinf(th),R0*.25f,th,L);}
+      polarStar(cx,cy,R0,R1,10,500,L); }
     // L_SPOKES: 10 radial
-    {
-        auto&L=layers[L_SPOKES];
-        for(int k=0;k<10;k++){
-            float th=2*PI*k/10;
-            float rr=R0+R1*cosf(10*th);
-            L.push_back({cx+R0*.18f*cosf(th),cy+R0*.18f*sinf(th)});
-            L.push_back({cx+rr*cosf(th),cy+rr*sinf(th)});
-        }
-        for(int k=0;k<10;k++){
-            float th=2*PI*k/10+PI/10;
-            L.push_back({cx+R0*.3f*cosf(th),cy+R0*.3f*sinf(th)});
-            L.push_back({cx+R0*.55f*cosf(th),cy+R0*.55f*sinf(th)});
-        }
-    }
-    // L_GRID_MAIN: 5 overlapping square grids at 36° increments
-    {
-        std::vector<Vec2> raw;raw.reserve(80000);
-        for(int g=0;g<5;g++)
-            sqHankin(a,cx,cy,R0*1.1f,caDeg,g*PI/5,raw);
-        layers[L_GRID_MAIN]=raw;
-    }
-    // L_GRID_FINE: fine penrose-like detail
-    {
-        std::vector<Vec2> raw;raw.reserve(30000);
-        sqHankin(a*.5f,cx,cy,R0*.4f,caDeg*.9f,PI/10,raw);
-        triHankin(a*.6f,cx,cy,R0*.45f,caDeg*.8f,raw);
-        layers[L_GRID_FINE]=raw;
-    }
-    // L_MODULES: decagonal frames
-    {
-        auto&L=layers[L_MODULES];
-        for(int k=0;k<10;k++){
-            float th=2*PI*k/10;
-            float sx=cx+R0*.7f*cosf(th),sy=cy+R0*.7f*sinf(th);
-            regPoly(sx,sy,a*.5f,10,th,L);
-            regPoly(sx,sy,a*.35f,5,th+PI/10,L);
-        }
-    }
-    // L_STARS8: {10/3} and {10/4} stars
-    {
-        auto&L=layers[L_STARS8];
-        starPoly(cx,cy,R0*.35f,10,3,0,L);
-        for(int k=0;k<10;k++){
-            float th=2*PI*k/10+PI/10;
-            float sx=cx+R0*.55f*cosf(th),sy=cy+R0*.55f*sinf(th);
-            starPoly(sx,sy,a*.4f,10,4,th,L);
-        }
-        for(int k=0;k<5;k++){
-            float th=2*PI*k/5;
-            float sx=cx+R0*.4f*cosf(th),sy=cy+R0*.4f*sinf(th);
-            starPoly(sx,sy,a*.3f,5,2,th,L);
-        }
-    }
+    { auto&L=layers[L_SPOKES];
+      for(int k=0;k<10;k++){float th=2*PI*k/10;
+        L.push_back({cx+sc*cosf(th),cy+sc*sinf(th)});
+        L.push_back({cx+R0*cosf(th),cy+R0*sinf(th)});}
+      for(int k=0;k<10;k++){float th=2*PI*k/10+PI/10;
+        L.push_back({cx+R0*.3f*cosf(th),cy+R0*.3f*sinf(th)});
+        L.push_back({cx+R0*.6f*cosf(th),cy+R0*.6f*sinf(th)});}}
+    // L_GRID_MAIN: 5 overlapping square grids at 36° (quasi-periodic)
+    { std::vector<Vec2> raw;raw.reserve(80000);
+      for(int g=0;g<5;g++) sqHankin(sc,cx,cy,R0*1.1f,caDeg,g*PI/5,raw);
+      layers[L_GRID_MAIN]=raw; }
+    // L_GRID_FINE: fine detail
+    { std::vector<Vec2> raw;
+      sqHankin(sc*.5f,cx,cy,R0*.45f,caDeg*.9f,PI/10,raw);
+      triHankin(sc*.6f,cx,cy,R0*.5f,caDeg*.8f,raw);
+      layers[L_GRID_FINE]=raw; }
+    // L_MODULES: pentagons and bowties (p.34 shapes)
+    { auto&L=layers[L_MODULES];
+      for(int k=0;k<10;k++){float th=2*PI*k/10;
+        float d=R0*.52f;
+        regPoly(cx+d*cosf(th),cy+d*sinf(th),sc*.6f,5,th,L);}
+      for(int k=0;k<10;k++){float th=2*PI*k/10+PI/10;
+        float d=R0*.42f;
+        regPoly(cx+d*cosf(th),cy+d*sinf(th),sc*.5f,10,th,L);}
+      // {10/3} at center
+      starPoly(cx,cy,R0*.3f,10,3,0,L); }
+    // L_STARS8: {10/4} pentagrammaton stars (p.36-37)
+    { auto&L=layers[L_STARS8];
+      starPoly(cx,cy,R0*.55f,10,4,0,L);
+      for(int k=0;k<5;k++){float th=2*PI*k/5;
+        float d=R0*.65f;
+        starPoly(cx+d*cosf(th),cy+d*sinf(th),sc*.55f,5,2,th,L);}
+      for(int k=0;k<10;k++){float th=2*PI*k/10+PI/10;
+        float d=R0*.48f;
+        starPoly(cx+d*cosf(th),cy+d*sinf(th),sc*.35f,10,3,th,L);}}
     // L_ROTATING
-    {
-        std::vector<Vec2> raw;raw.reserve(20000);
-        sqHankin(a*1.5f,cx,cy,R0*.7f,caDeg*.85f,layerRot,raw);
-        layers[L_ROTATING]=raw;
-    }
+    { std::vector<Vec2> raw;
+      sqHankin(sc*1.5f,cx,cy,R0*.75f,caDeg*.85f,layerRot,raw);
+      layers[L_ROTATING]=raw; }
 }
 
 // ============================================================
-// Ornament 5: Muqarnas Cascade (radial nested)
+// Ornament 5: Zillīj — 8-fold khaātam compositions (p.26-29)
 // ============================================================
 static void generateOrnament_5(float w, float h, float R0, float starDepth,
     float caDeg, float layerRot, std::vector<Vec2> layers[NUM_LAYERS])
 {
     float cx=w*.5f, cy=h*.5f;
-    float a=R0*0.13f;
-    float R1=R0*starDepth;
-
-    // L_STAR_BOUNDARY: many concentric 12-fold rings
-    {
-        auto&L=layers[L_STAR_BOUNDARY];
-        for(int ring=2;ring<=8;ring++){
-            float r=R0*ring*.12f;
-            float depth=R1*ring*.1f;
-            polarStar(cx,cy,r,depth,12,480,L);
-        }
-    }
-    // L_SPOKES: 12 + 12 interleaved
-    {
-        auto&L=layers[L_SPOKES];
-        for(int k=0;k<12;k++){
-            float th=2*PI*k/12;
-            L.push_back({cx+R0*.1f*cosf(th),cy+R0*.1f*sinf(th)});
-            L.push_back({cx+R0*.96f*cosf(th),cy+R0*.96f*sinf(th)});
-        }
-        for(int k=0;k<12;k++){
-            float th=2*PI*k/12+PI/12;
-            L.push_back({cx+R0*.25f*cosf(th),cy+R0*.25f*sinf(th)});
-            L.push_back({cx+R0*.75f*cosf(th),cy+R0*.75f*sinf(th)});
-        }
-    }
-    // L_GRID_MAIN: hex Hankin
-    {
-        std::vector<Vec2> raw;raw.reserve(60000);
-        hexHankin(a,cx,cy,R0*1.1f,caDeg,raw);
-        hexHankin(a*1.5f,cx,cy,R0*1.1f,caDeg*.95f,raw);
-        layers[L_GRID_MAIN]=raw;
-    }
-    // L_GRID_FINE: tri + sq overlay
-    {
-        std::vector<Vec2> raw;raw.reserve(40000);
-        triHankin(a*.6f,cx,cy,R0*.6f,caDeg*.85f,raw);
-        sqHankin(a*.5f,cx,cy,R0*.5f,caDeg*.9f,0,raw);
-        layers[L_GRID_FINE]=raw;
-    }
-    // L_MODULES: nested {12/5} and {6/2}
-    {
-        auto&L=layers[L_MODULES];
-        for(int ring=1;ring<=4;ring++){
-            float rd=R0*ring*.2f;
-            starPoly(cx,cy,rd,12,5,ring*PI/24,L);
-            for(int k=0;k<12;k++){
-                float th=2*PI*k/12+ring*PI/12;
-                float sx=cx+rd*cosf(th),sy=cy+rd*sinf(th);
-                starPoly(sx,sy,a*.35f,6,2,th,L);
-            }
-        }
-    }
-    // L_STARS8: {8/3} ring
-    {
-        auto&L=layers[L_STARS8];
-        for(int k=0;k<12;k++){
-            float th=2*PI*k/12;
-            float sx=cx+R0*.65f*cosf(th),sy=cy+R0*.65f*sinf(th);
-            starPoly(sx,sy,a*.5f,8,3,th,L);
-        }
-        starPoly(cx,cy,R0*.2f,12,5,0,L);
-    }
+    float sc=R0*0.15f;
+    (void)starDepth;
+    // p.26-29: Zillīj 8-fold with khaātam (octagram seal) and saft (hexagon)
+    // L_STAR_BOUNDARY: grid of khaātam + saft pattern
+    { auto&L=layers[L_STAR_BOUNDARY];
+      float sp=sc*2.4f; // spacing for khaātam grid
+      int n=(int)ceilf(R0*1.1f/sp)+1;
+      for(int i=-n;i<=n;i++)for(int j=-n;j<=n;j++){
+        float sx=cx+i*sp,sy=cy+j*sp;
+        if(sqrtf((sx-cx)*(sx-cx)+(sy-cy)*(sy-cy))>R0*1.1f)continue;
+        khaatam(sx,sy,sc*.95f,0,L);}
+      // Saft (elongated hexagons) between khaātam
+      for(int i=-n;i<=n;i++)for(int j=-n;j<=n;j++){
+        float sx=cx+(i+.5f)*sp,sy=cy+j*sp;
+        if(sqrtf((sx-cx)*(sx-cx)+(sy-cy)*(sy-cy))>R0)continue;
+        // Vertical saft
+        float sh=sc*.55f,sw=sc*.25f;
+        L.push_back({sx-sw,sy-sh});L.push_back({sx+sw,sy-sh});
+        L.push_back({sx+sw,sy-sh});L.push_back({sx+sw,sy+sh});
+        L.push_back({sx+sw,sy+sh});L.push_back({sx-sw,sy+sh});
+        L.push_back({sx-sw,sy+sh});L.push_back({sx-sw,sy-sh});
+        // Horizontal saft
+        float sx2=cx+i*sp,sy2=cy+(j+.5f)*sp;
+        if(sqrtf((sx2-cx)*(sx2-cx)+(sy2-cy)*(sy2-cy))>R0)continue;
+        L.push_back({sx2-sh,sy2-sw});L.push_back({sx2+sh,sy2-sw});
+        L.push_back({sx2+sh,sy2-sw});L.push_back({sx2+sh,sy2+sw});
+        L.push_back({sx2+sh,sy2+sw});L.push_back({sx2-sh,sy2+sw});
+        L.push_back({sx2-sh,sy2+sw});L.push_back({sx2-sh,sy2-sw});}}
+    // L_SPOKES: 8 radial
+    { auto&L=layers[L_SPOKES];
+      for(int k=0;k<8;k++){float th=PI*k/4;
+        L.push_back({cx+sc*cosf(th),cy+sc*sinf(th)});
+        L.push_back({cx+R0*.95f*cosf(th),cy+R0*.95f*sinf(th)});}}
+    // L_GRID_MAIN: Hankin 0°
+    sqHankin(sc,cx,cy,R0*1.1f,caDeg,0,layers[L_GRID_MAIN]);
+    // L_GRID_FINE: Hankin 45°
+    sqHankin(sc,cx,cy,R0*1.1f,caDeg,PI/4,layers[L_GRID_FINE]);
+    // L_MODULES: larger framing octagons (p.27 compositions)
+    { auto&L=layers[L_MODULES];
+      float sp=sc*2.4f;
+      int n=(int)ceilf(R0/sp)+1;
+      for(int i=-n;i<=n;i++)for(int j=-n;j<=n;j++){
+        float sx=cx+i*sp,sy=cy+j*sp;
+        if(sqrtf((sx-cx)*(sx-cx)+(sy-cy)*(sy-cy))>R0*1.05f)continue;
+        regPoly(sx,sy,sc*1.15f,8,PI/8,L);}}
+    // L_STARS8: {8/2} stars between khaātam
+    { auto&L=layers[L_STARS8];
+      float sp=sc*2.4f;
+      int n=(int)ceilf(R0/sp)+1;
+      for(int i=-n;i<=n;i++)for(int j=-n;j<=n;j++){
+        float sx=cx+(i+.5f)*sp,sy=cy+(j+.5f)*sp;
+        if(sqrtf((sx-cx)*(sx-cx)+(sy-cy)*(sy-cy))>R0)continue;
+        starPoly(sx,sy,sc*.55f,8,2,PI/8,L);
+        regPoly(sx,sy,sc*.65f,4,0,L);}}
     // L_ROTATING
-    {
-        std::vector<Vec2> raw;raw.reserve(20000);
-        hexHankin(a*1.3f,cx,cy,R0*.75f,caDeg*.8f,raw);
-        float c=cosf(layerRot),s=sinf(layerRot);
-        for(auto&v:raw){float dx=v.x-cx,dy=v.y-cy;v.x=dx*c-dy*s+cx;v.y=dx*s+dy*c+cy;}
-        layers[L_ROTATING]=raw;
-    }
+    { std::vector<Vec2> raw;
+      sqHankin(sc*1.8f,cx,cy,R0*.85f,caDeg*.9f,layerRot,raw);
+      layers[L_ROTATING]=raw; }
 }
 
 // ============================================================
@@ -789,80 +650,75 @@ static OrnamentFunc ornamentFuncs[NUM_ORNAMENTS] = {
     generateOrnament_3, generateOrnament_4, generateOrnament_5
 };
 static const char* ornamentNames[NUM_ORNAMENTS] = {
-    "12-fold Mandala", "Hexagonal", "Square Kufic",
-    "Octagonal", "Decagonal", "Muqarnas"
+    "Star & Hexagon", "Breath of Compassionate", "Eight-Fold Rosettes",
+    "Six of One (12-fold)", "Umm al-Girih (10-fold)", "Zillij (8-fold)"
 };
 
 // ============================================================
-// Generate simplified thumbnail geometry (few segments, no Hankin)
+// Thumbnail pictograms matching book patterns
 // ============================================================
 static void generateThumb(int idx, float sz, std::vector<Vec2>& out) {
     float cx=sz*.5f, cy=sz*.5f, r=sz*.38f;
     switch(idx) {
-    case 0: // 12-fold mandala: 12-pointed star + circle
-        for(int i=0;i<12;i++){
-            float a1=2*PI*i/12,a2=2*PI*((i+5)%12)/12;
+    case 0: // Star & Hexagon: hex + double triangle (Seal of Solomon)
+        for(int i=0;i<6;i++){float a1=PI*i/3+PI/6,a2=PI*(i+1)/3+PI/6;
             out.push_back({cx+r*cosf(a1),cy+r*sinf(a1)});
             out.push_back({cx+r*cosf(a2),cy+r*sinf(a2)});}
-        for(int i=0;i<24;i++){
-            float a1=2*PI*i/24,a2=2*PI*(i+1)/24;float rr=r*.55f;
-            out.push_back({cx+rr*cosf(a1),cy+rr*sinf(a1)});
-            out.push_back({cx+rr*cosf(a2),cy+rr*sinf(a2)});}
-        break;
-    case 1: // Hexagonal: hex + inner {6/2}
-        for(int i=0;i<6;i++){
-            float a1=PI*i/3+PI/6,a2=PI*(i+1)/3+PI/6;
-            out.push_back({cx+r*cosf(a1),cy+r*sinf(a1)});
-            out.push_back({cx+r*cosf(a2),cy+r*sinf(a2)});}
-        for(int i=0;i<6;i++){
-            float a1=PI*i/3+PI/6,a2=PI*((i+2)%6)/3+PI/6;float rr=r*.6f;
-            out.push_back({cx+rr*cosf(a1),cy+rr*sinf(a1)});
-            out.push_back({cx+rr*cosf(a2),cy+rr*sinf(a2)});}
-        break;
-    case 2: // Square: overlapping squares
-        for(int q=0;q<2;q++){
-            float rot=q*PI/4;float rr=r*(q==0?1.f:.72f);
-            for(int i=0;i<4;i++){
-                float a1=PI*i/2+PI/4+rot,a2=PI*(i+1)/2+PI/4+rot;
+        for(int t=0;t<2;t++){float rot=t*PI/6;
+            for(int i=0;i<3;i++){float a1=2*PI*i/3+rot-PI/6,a2=2*PI*(i+1)/3+rot-PI/6;float rr=r*.65f;
                 out.push_back({cx+rr*cosf(a1),cy+rr*sinf(a1)});
                 out.push_back({cx+rr*cosf(a2),cy+rr*sinf(a2)});}}
-        // {8/3} in center
-        for(int i=0;i<8;i++){
-            float a1=2*PI*i/8,a2=2*PI*((i+3)%8)/8;float rr=r*.4f;
-            out.push_back({cx+rr*cosf(a1),cy+rr*sinf(a1)});
-            out.push_back({cx+rr*cosf(a2),cy+rr*sinf(a2)});}
         break;
-    case 3: // Octagonal: octagon + {8/3}
-        for(int i=0;i<8;i++){
-            float a1=2*PI*i/8,a2=2*PI*(i+1)/8;
+    case 1: // Breath: two overlapping squares (khaātam)
+        for(int q=0;q<2;q++){float rot=q*PI/4;
+            for(int i=0;i<4;i++){float a1=PI*i/2+PI/4+rot,a2=PI*(i+1)/2+PI/4+rot;
+                out.push_back({cx+r*cosf(a1),cy+r*sinf(a1)});
+                out.push_back({cx+r*cosf(a2),cy+r*sinf(a2)});}}
+        // Small cross
+        for(int k=0;k<4;k++){float th=PI*k/2;float rr=r*.3f;
+            out.push_back({cx,cy});out.push_back({cx+rr*cosf(th),cy+rr*sinf(th)});}
+        break;
+    case 2: // Rosette: octagon + petals
+        for(int i=0;i<8;i++){float a1=2*PI*i/8,a2=2*PI*(i+1)/8;
             out.push_back({cx+r*cosf(a1),cy+r*sinf(a1)});
             out.push_back({cx+r*cosf(a2),cy+r*sinf(a2)});}
-        for(int i=0;i<8;i++){
-            float a1=2*PI*i/8,a2=2*PI*((i+3)%8)/8;float rr=r*.7f;
-            out.push_back({cx+rr*cosf(a1),cy+rr*sinf(a1)});
-            out.push_back({cx+rr*cosf(a2),cy+rr*sinf(a2)});}
+        for(int i=0;i<8;i++){float a=2*PI*i/8;float rr=r*.5f;
+            float aL=a-PI/8,aR=a+PI/8;
+            out.push_back({cx+rr*.5f*cosf(a),cy+rr*.5f*sinf(a)});
+            out.push_back({cx+r*.75f*cosf(aL),cy+r*.75f*sinf(aL)});
+            out.push_back({cx+r*.75f*cosf(aL),cy+r*.75f*sinf(aL)});
+            out.push_back({cx+r*cosf(a),cy+r*sinf(a)});
+            out.push_back({cx+r*cosf(a),cy+r*sinf(a)});
+            out.push_back({cx+r*.75f*cosf(aR),cy+r*.75f*sinf(aR)});
+            out.push_back({cx+r*.75f*cosf(aR),cy+r*.75f*sinf(aR)});
+            out.push_back({cx+rr*.5f*cosf(a),cy+rr*.5f*sinf(a)});}
         break;
-    case 4: // Decagonal: decagon + {10/3}
-        for(int i=0;i<10;i++){
-            float a1=2*PI*i/10,a2=2*PI*(i+1)/10;
+    case 3: // 12-fold: dodecagon + inner star
+        for(int i=0;i<12;i++){float a1=2*PI*i/12,a2=2*PI*(i+1)/12;
             out.push_back({cx+r*cosf(a1),cy+r*sinf(a1)});
             out.push_back({cx+r*cosf(a2),cy+r*sinf(a2)});}
-        for(int i=0;i<10;i++){
-            float a1=2*PI*i/10,a2=2*PI*((i+3)%10)/10;float rr=r*.65f;
+        for(int i=0;i<12;i++){float a1=2*PI*i/12,a2=2*PI*((i+5)%12)/12;float rr=r*.65f;
             out.push_back({cx+rr*cosf(a1),cy+rr*sinf(a1)});
             out.push_back({cx+rr*cosf(a2),cy+rr*sinf(a2)});}
         break;
-    case 5: // Muqarnas: concentric circles + 12 spokes
-        for(int ring=1;ring<=3;ring++){
-            float rr=r*ring*.32f;
-            for(int i=0;i<24;i++){
-                float a1=2*PI*i/24,a2=2*PI*(i+1)/24;
-                out.push_back({cx+rr*cosf(a1),cy+rr*sinf(a1)});
-                out.push_back({cx+rr*cosf(a2),cy+rr*sinf(a2)});}}
-        for(int k=0;k<12;k++){
-            float th=2*PI*k/12;
-            out.push_back({cx+r*.15f*cosf(th),cy+r*.15f*sinf(th)});
-            out.push_back({cx+r*.95f*cosf(th),cy+r*.95f*sinf(th)});}
+    case 4: // Umm al-Girih: decagon + {10/3} star
+        for(int i=0;i<10;i++){float a1=2*PI*i/10,a2=2*PI*(i+1)/10;
+            out.push_back({cx+r*cosf(a1),cy+r*sinf(a1)});
+            out.push_back({cx+r*cosf(a2),cy+r*sinf(a2)});}
+        for(int i=0;i<10;i++){float a1=2*PI*i/10,a2=2*PI*((i+3)%10)/10;float rr=r*.6f;
+            out.push_back({cx+rr*cosf(a1),cy+rr*sinf(a1)});
+            out.push_back({cx+rr*cosf(a2),cy+rr*sinf(a2)});}
+        for(int i=0;i<5;i++){float a1=2*PI*i/5+PI/10,a2=2*PI*(i+1)/5+PI/10;float rr=r*.3f;
+            out.push_back({cx+rr*cosf(a1),cy+rr*sinf(a1)});
+            out.push_back({cx+rr*cosf(a2),cy+rr*sinf(a2)});}
+        break;
+    case 5: // Zillīj: khaātam ({8/3} + octagon)
+        for(int i=0;i<8;i++){float a1=2*PI*i/8,a2=2*PI*((i+3)%8)/8;
+            out.push_back({cx+r*cosf(a1),cy+r*sinf(a1)});
+            out.push_back({cx+r*cosf(a2),cy+r*sinf(a2)});}
+        for(int i=0;i<8;i++){float a1=2*PI*i/8+PI/8,a2=2*PI*(i+1)/8+PI/8;float rr=r*.75f;
+            out.push_back({cx+rr*cosf(a1),cy+rr*sinf(a1)});
+            out.push_back({cx+rr*cosf(a2),cy+rr*sinf(a2)});}
         break;
     }
 }
@@ -958,7 +814,156 @@ struct ChainBuilder {
     }
 };
 
-// (morph is now a cross-fade, no geometry distortion needed)
+// Per-layer rendering data (at file scope for morphLayers)
+struct LayerRender {
+    std::vector<Vec2> verts;
+    std::vector<GLint> starts;
+    std::vector<GLsizei> counts;
+};
+
+// ============================================================
+// Minimal 3x5 stroke font — renders text as GL_LINES
+// Each glyph: pairs of (x1,y1,x2,y2) normalized to 0..3 x 0..5
+// ============================================================
+static void drawStrokeChar(float x, float y, float s, char ch) {
+    // Simple segment data for common chars (uppercase + digits + &-/)
+    struct Seg { float x1,y1,x2,y2; };
+    static const Seg empty[] = {{0,0,0,0}};
+    #define G(name) static const Seg name
+    G(A)[]={{0,5,0,1},{0,1,1,0},{1,0,2,0},{2,0,3,1},{3,1,3,5},{0,3,3,3}};
+    G(B)[]={{0,0,0,5},{0,0,2,0},{2,0,3,1},{3,1,2,2.5f},{2,2.5f,0,2.5f},{2,2.5f,3,3.5f},{3,3.5f,2,5},{2,5,0,5}};
+    G(C)[]={{3,0,1,0},{1,0,0,1},{0,1,0,4},{0,4,1,5},{1,5,3,5}};
+    G(D)[]={{0,0,0,5},{0,0,2,0},{2,0,3,1},{3,1,3,4},{3,4,2,5},{2,5,0,5}};
+    G(E)[]={{3,0,0,0},{0,0,0,5},{0,5,3,5},{0,2.5f,2,2.5f}};
+    G(F)[]={{3,0,0,0},{0,0,0,5},{0,2.5f,2,2.5f}};
+    G(GG)[]={{3,1,2,0},{2,0,1,0},{1,0,0,1},{0,1,0,4},{0,4,1,5},{1,5,3,5},{3,5,3,3},{3,3,2,3}};
+    G(H)[]={{0,0,0,5},{3,0,3,5},{0,2.5f,3,2.5f}};
+    G(I)[]={{1,0,2,0},{1.5f,0,1.5f,5},{1,5,2,5}};
+    G(K)[]={{0,0,0,5},{3,0,0,2.5f},{0,2.5f,3,5}};
+    G(L)[]={{0,0,0,5},{0,5,3,5}};
+    G(M)[]={{0,5,0,0},{0,0,1.5f,2},{1.5f,2,3,0},{3,0,3,5}};
+    G(N)[]={{0,5,0,0},{0,0,3,5},{3,5,3,0}};
+    G(O)[]={{1,0,2,0},{2,0,3,1},{3,1,3,4},{3,4,2,5},{2,5,1,5},{1,5,0,4},{0,4,0,1},{0,1,1,0}};
+    G(P)[]={{0,0,0,5},{0,0,2,0},{2,0,3,1},{3,1,3,2},{3,2,2,2.5f},{2,2.5f,0,2.5f}};
+    G(R)[]={{0,0,0,5},{0,0,2,0},{2,0,3,1},{3,1,2,2.5f},{2,2.5f,0,2.5f},{1.5f,2.5f,3,5}};
+    G(S)[]={{3,0,1,0},{1,0,0,1},{0,1,0,2},{0,2,1,2.5f},{1,2.5f,2,2.5f},{2,2.5f,3,3.5f},{3,3.5f,3,4},{3,4,2,5},{2,5,0,5}};
+    G(T)[]={{0,0,3,0},{1.5f,0,1.5f,5}};
+    G(U)[]={{0,0,0,4},{0,4,1,5},{1,5,2,5},{2,5,3,4},{3,4,3,0}};
+    G(X)[]={{0,0,3,5},{3,0,0,5}};
+    G(Z)[]={{0,0,3,0},{3,0,0,5},{0,5,3,5}};
+    G(n0)[]={{1,0,2,0},{2,0,3,1},{3,1,3,4},{3,4,2,5},{2,5,1,5},{1,5,0,4},{0,4,0,1},{0,1,1,0}};
+    G(n1)[]={{1,1,1.5f,0},{1.5f,0,1.5f,5},{0.5f,5,2.5f,5}};
+    G(n2)[]={{0,1,1,0},{1,0,2,0},{2,0,3,1},{3,1,3,2},{3,2,0,5},{0,5,3,5}};
+    G(n5)[]={{3,0,0,0},{0,0,0,2.5f},{0,2.5f,2,2.5f},{2,2.5f,3,3.5f},{3,3.5f,2,5},{2,5,0,5}};
+    G(n6)[]={{2,0,1,0},{1,0,0,1},{0,1,0,4},{0,4,1,5},{1,5,2,5},{2,5,3,4},{3,4,2,2.5f},{2,2.5f,0,2.5f}};
+    G(n8)[]={{1,0,2,0},{2,0,3,1},{3,1,2,2.5f},{2,2.5f,1,2.5f},{1,2.5f,0,1},{0,1,1,0},{1,2.5f,0,3.5f},{0,3.5f,1,5},{1,5,2,5},{2,5,3,3.5f},{3,3.5f,2,2.5f}};
+    G(AMP)[]={{2,1,1,0},{1,0,0,1},{0,1,1,2.5f},{1,2.5f,0,4},{0,4,1,5},{1,5,3,3},{3,3,3,4},{3,4,3,5}};
+    G(DASH)[]={{0,2.5f,3,2.5f}};
+    G(SPC)[]={{0,0,0,0}};
+    #undef G
+
+    const Seg* segs=empty; int ns=0;
+    #define MAP(c,arr) case c: segs=arr;ns=sizeof(arr)/sizeof(Seg);break;
+    switch(ch>='a'&&ch<='z'?ch-32:ch){
+        MAP('A',A) MAP('B',B) MAP('C',C) MAP('D',D) MAP('E',E) MAP('F',F)
+        MAP('G',GG) MAP('H',H) MAP('I',I) MAP('K',K) MAP('L',L) MAP('M',M)
+        MAP('N',N) MAP('O',O) MAP('P',P) MAP('R',R) MAP('S',S) MAP('T',T)
+        MAP('U',U) MAP('X',X) MAP('Z',Z)
+        MAP('0',n0) MAP('1',n1) MAP('2',n2) MAP('5',n5) MAP('6',n6) MAP('8',n8)
+        MAP('&',AMP) MAP('-',DASH) MAP(' ',SPC)
+        default: break;
+    }
+    #undef MAP
+    for(int i=0;i<ns;i++){
+        glVertex2f(x+segs[i].x1*s, y+segs[i].y1*s);
+        glVertex2f(x+segs[i].x2*s, y+segs[i].y2*s);
+    }
+}
+
+static void drawStrokeText(float x, float y, float scale, const char* text, float r, float g, float b, float a) {
+    glColor4f(r,g,b,a);
+    glLineWidth(1.0f);
+    glBegin(GL_LINES);
+    float cx=x;
+    for(const char*p=text;*p;p++){
+        drawStrokeChar(cx,y,scale,*p);
+        cx+=4*scale; // char width + spacing
+    }
+    glEnd();
+}
+
+// Resample a closed chain to exactly N evenly-spaced vertices
+static std::vector<Vec2> resampleChain(const Vec2* pts, int n, int targetN) {
+    if(n<2||targetN<2) return std::vector<Vec2>(targetN,pts[0]);
+    // Compute cumulative arc lengths
+    std::vector<float> cum(n+1,0);
+    for(int i=1;i<=n;i++){
+        float dx=pts[i%n].x-pts[(i-1)%n].x, dy=pts[i%n].y-pts[(i-1)%n].y;
+        cum[i]=cum[i-1]+sqrtf(dx*dx+dy*dy);
+    }
+    float totalLen=cum[n];
+    if(totalLen<1e-6f) return std::vector<Vec2>(targetN,pts[0]);
+    std::vector<Vec2> out(targetN);
+    int seg=0;
+    for(int i=0;i<targetN;i++){
+        float t=(float)i/(float)targetN*totalLen;
+        while(seg<n-1 && cum[seg+1]<t) seg++;
+        float segLen=cum[seg+1]-cum[seg];
+        float frac=(segLen>1e-8f)?(t-cum[seg])/segLen:0;
+        out[i]={pts[seg%n].x+(pts[(seg+1)%n].x-pts[seg%n].x)*frac,
+                pts[seg%n].y+(pts[(seg+1)%n].y-pts[seg%n].y)*frac};
+    }
+    return out;
+}
+
+// Interpolate two LayerRender arrays into a merged result
+static void morphLayers(LayerRender src[], LayerRender dst[], LayerRender out[],
+                        int numLayers, float t, float cx, float cy) {
+    float s = t*t*(3-2*t); // smoothstep
+    for(int i=0;i<numLayers;i++){
+        out[i].verts.clear(); out[i].starts.clear(); out[i].counts.clear();
+        int nSrc=(int)src[i].starts.size(), nDst=(int)dst[i].starts.size();
+        int nMax=nSrc>nDst?nSrc:nDst;
+        for(int c=0;c<nMax;c++){
+            bool hasSrc=(c<nSrc), hasDst=(c<nDst);
+            if(hasSrc && hasDst){
+                // Both exist — resample to same count and lerp
+                int cntS=src[i].counts[c], cntD=dst[i].counts[c];
+                int target=cntS>cntD?cntS:cntD;
+                if(target<3) target=3;
+                auto rS=resampleChain(&src[i].verts[src[i].starts[c]],cntS,target);
+                auto rD=resampleChain(&dst[i].verts[dst[i].starts[c]],cntD,target);
+                GLint start=(GLint)out[i].verts.size();
+                for(int v=0;v<target;v++){
+                    out[i].verts.push_back({rS[v].x*(1-s)+rD[v].x*s,
+                                            rS[v].y*(1-s)+rD[v].y*s});
+                }
+                out[i].starts.push_back(start);
+                out[i].counts.push_back(target);
+            } else if(hasSrc) {
+                // Source only — shrink toward center
+                GLint start=(GLint)out[i].verts.size();
+                int cnt=src[i].counts[c];
+                const Vec2* p=&src[i].verts[src[i].starts[c]];
+                for(int v=0;v<cnt;v++){
+                    out[i].verts.push_back({p[v].x*(1-s)+cx*s, p[v].y*(1-s)+cy*s});
+                }
+                out[i].starts.push_back(start);
+                out[i].counts.push_back(cnt);
+            } else {
+                // Dest only — grow from center
+                GLint start=(GLint)out[i].verts.size();
+                int cnt=dst[i].counts[c];
+                const Vec2* p=&dst[i].verts[dst[i].starts[c]];
+                for(int v=0;v<cnt;v++){
+                    out[i].verts.push_back({cx*(1-s)+p[v].x*s, cy*(1-s)+p[v].y*s});
+                }
+                out[i].starts.push_back(start);
+                out[i].counts.push_back(cnt);
+            }
+        }
+    }
+}
 
 // ============================================================
 // Main
@@ -989,13 +994,6 @@ int main(int argc,char*argv[]){
     Complex fftBuf[FFT_N];float hann[FFT_N];
     for(int i=0;i<FFT_N;i++)hann[i]=.5f*(1-cosf(2*PI*i/(FFT_N-1)));
 
-    // Per-layer rendering data
-    struct LayerRender {
-        std::vector<Vec2> verts;
-        std::vector<GLint> starts;
-        std::vector<GLsizei> counts;
-    };
-
     std::vector<Vec2> layerSegs[NUM_LAYERS];
     LayerRender lr[NUM_LAYERS];
     ChainBuilder cb;
@@ -1006,14 +1004,19 @@ int main(int argc,char*argv[]){
     float morphT = 0;         // 0..1: 0=fully old, 1=fully new
     static const float MORPH_SPEED = 0.018f;  // per frame (~3.3s transition)
 
-    // Second set of layer data for cross-fade
+    // Second set of layer data for morph target
     std::vector<Vec2> layerSegs2[NUM_LAYERS];
     LayerRender lr2[NUM_LAYERS];
+    LayerRender lrMorph[NUM_LAYERS]; // interpolated result
 
     // Pre-generate thumbnail geometry
     std::vector<Vec2> thumbGeom[NUM_ORNAMENTS];
     for (int i = 0; i < NUM_ORNAMENTS; i++)
         generateThumb(i, (float)THUMB_SIZE, thumbGeom[i]);
+
+    // Set initial window title
+    { std::string t = std::string("Ornament of Pressure — ") + ornamentNames[0];
+      SDL_SetWindowTitle(win, t.c_str()); }
 
     bool run=true;
     while(run){
@@ -1074,6 +1077,9 @@ int main(int argc,char*argv[]){
                 curOrnament=targetOrnament;
                 targetOrnament=-1;
                 morphT=0;
+                // Update window title with pattern name
+                std::string title = std::string("Ornament of Pressure — ") + ornamentNames[curOrnament];
+                SDL_SetWindowTitle(win, title.c_str());
             }
         }
 
@@ -1091,8 +1097,10 @@ int main(int argc,char*argv[]){
             sBass=sBass*.80f+bass*.20f;sMid=sMid*.82f+mid*.18f;sHigh=sHigh*.85f+high*.15f;
         }
 
-        float R0=250+sBass*120, depth=.12f+sBass*.18f, angle=25+sMid*40;
-        layerRot+=sHigh*.008f+.001f;
+        float R0=340; // fixed size — audio drives geometry, not scale
+        float depth=.08f+sBass*.25f;    // bass → star depth / breath amount
+        float angle=20+sMid*50;          // mids → contact angle (pattern openness)
+        layerRot+=sHigh*.012f+.001f;     // highs → rotation speed
 
         int wW,wH;SDL_GL_GetDrawableSize(win,&wW,&wH);
         int winLW,winLH;SDL_GetWindowSize(win,&winLW,&winLH);
@@ -1198,6 +1206,21 @@ int main(int argc,char*argv[]){
                 glDrawArrays(GL_LINES,0,(GLsizei)scaled.size());
                 glDisableClientState(GL_VERTEX_ARRAY);
             }
+            // Draw pattern name below thumbnail
+            {
+                static const char* shortNames[NUM_ORNAMENTS] = {
+                    "Star & Hex", "Breath", "8-Fold", "Six of One", "Umm al-Girih", "Zillij"
+                };
+                float nameScale = 3.0f * dpiScale;
+                const char* nm = shortNames[ti];
+                int nchars = (int)strlen(nm);
+                // Each char advances 4*scale; last char is 3*scale wide
+                float tw = nchars > 0 ? (nchars - 1) * 4.0f * nameScale + 3.0f * nameScale : 0;
+                float nx = tx + tsz * 0.5f - tw * 0.5f;
+                float ny = ty + tsz + 3 * dpiScale;
+                float tbr = selected ? 0.9f : (isTarget ? 0.6f : 0.35f);
+                drawStrokeText(nx, ny, nameScale, nm, tbr, tbr * 0.85f, tbr * 0.3f, 1.0f);
+            }
         }
 
         // ---- Draw sensitivity bar below thumbnails ----
@@ -1256,40 +1279,40 @@ int main(int argc,char*argv[]){
             0.85f + sBass * 0.15f,
             0.55f + sHigh * 0.45f,
         };
-        float lw[NUM_LAYERS] = { 2.2f, 1.8f, 1.3f, 1.0f, 2.0f, 2.0f, 1.1f };
-        // Fill alpha per layer (brighter fills)
-        float fillAlpha[NUM_LAYERS] = { 0.35f, 0.22f, 0.28f, 0.20f, 0.30f, 0.38f, 0.18f };
+        float lw[NUM_LAYERS] = { 2.0f, 1.5f, 1.2f, 0.9f, 1.8f, 1.8f, 1.0f };
+        // Fill alpha per layer — heavy white fills
+        float fillAlpha[NUM_LAYERS] = { 0.55f, 0.40f, 0.48f, 0.35f, 0.50f, 0.55f, 0.30f };
 
-        // Smoothstep blend factor
-        float blend = 0;
+        // If morphing, interpolate geometry; otherwise just draw current
+        LayerRender* drawLR = lr;
         if(morphing){
-            float t=morphT;
-            blend=t*t*(3-2*t);
+            float ocx = sidebarPx + (wW - sidebarPx) * 0.5f;
+            float ocy = wH * 0.5f;
+            morphLayers(lr, lr2, lrMorph, NUM_LAYERS, morphT, ocx, ocy);
+            drawLR = lrMorph;
         }
-        float alphaOld = morphing ? (1.0f - blend) : 1.0f;
-        float alphaNew = blend;
 
-        // Lambda: draw one ornament's layers (fills + lines)
-        auto drawOrnament = [&](LayerRender lrArr[], float alpha) {
+        // Draw ornament (fills + lines)
+        {
             // Pass 1: filled polygons for every other contour (stencil even-odd)
             for(int i=0;i<NUM_LAYERS;i++){
-                if(lrArr[i].verts.empty())continue;
-                int nc=(int)lrArr[i].starts.size();
+                if(drawLR[i].verts.empty())continue;
+                int nc=(int)drawLR[i].starts.size();
                 if(nc==0)continue;
 
                 glBindBuffer(GL_ARRAY_BUFFER,vbo);
-                glBufferData(GL_ARRAY_BUFFER,lrArr[i].verts.size()*sizeof(Vec2),
-                             lrArr[i].verts.data(),GL_STREAM_DRAW);
+                glBufferData(GL_ARRAY_BUFFER,drawLR[i].verts.size()*sizeof(Vec2),
+                             drawLR[i].verts.data(),GL_STREAM_DRAW);
                 glEnableClientState(GL_VERTEX_ARRAY);
                 glVertexPointer(2,GL_FLOAT,0,0);
 
-                float p=pulse[i]*alpha;
-                float fa=fillAlpha[i]*alpha;
+                float p=pulse[i];
+                float fa=fillAlpha[i];
 
                 // Fill every other contour using stencil for correct non-convex fill
                 for(int c=0;c<nc;c+=2){
-                    GLint start=lrArr[i].starts[c];
-                    GLsizei cnt=lrArr[i].counts[c];
+                    GLint start=drawLR[i].starts[c];
+                    GLsizei cnt=drawLR[i].counts[c];
                     if(cnt<3)continue;
 
                     // Step 1: write stencil with triangle fan (invert bits)
@@ -1304,8 +1327,8 @@ int main(int argc,char*argv[]){
                     glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
                     glStencilFunc(GL_NOTEQUAL,0,0xFF);
                     glStencilOp(GL_KEEP,GL_KEEP,GL_KEEP);
-                    glColor4f(baseColors[i].r*p*0.5f, baseColors[i].g*p*0.5f,
-                              baseColors[i].b*p*0.5f, fa);
+                    glColor4f(baseColors[i].r*p*0.8f, baseColors[i].g*p*0.8f,
+                              baseColors[i].b*p*0.8f, fa);
                     // Draw a screen-filling quad (the stencil clips it)
                     glBindBuffer(GL_ARRAY_BUFFER,0);
                     glDisableClientState(GL_VERTEX_ARRAY);
@@ -1326,28 +1349,21 @@ int main(int argc,char*argv[]){
 
             // Pass 2: line outlines for ALL contours
             for(int i=0;i<NUM_LAYERS;i++){
-                if(lrArr[i].verts.empty())continue;
+                if(drawLR[i].verts.empty())continue;
                 glBindBuffer(GL_ARRAY_BUFFER,vbo);
-                glBufferData(GL_ARRAY_BUFFER,lrArr[i].verts.size()*sizeof(Vec2),
-                             lrArr[i].verts.data(),GL_STREAM_DRAW);
+                glBufferData(GL_ARRAY_BUFFER,drawLR[i].verts.size()*sizeof(Vec2),
+                             drawLR[i].verts.data(),GL_STREAM_DRAW);
                 glEnableClientState(GL_VERTEX_ARRAY);
                 glVertexPointer(2,GL_FLOAT,0,0);
 
-                float p=pulse[i]*alpha;
-                glColor4f(baseColors[i].r*p, baseColors[i].g*p, baseColors[i].b*p, alpha);
+                float p=pulse[i];
+                glColor4f(baseColors[i].r*p, baseColors[i].g*p, baseColors[i].b*p, 1.0f);
                 glLineWidth(lw[i]);
-                glMultiDrawArrays(GL_LINE_LOOP,lrArr[i].starts.data(),
-                                  lrArr[i].counts.data(),(GLsizei)lrArr[i].starts.size());
+                glMultiDrawArrays(GL_LINE_LOOP,drawLR[i].starts.data(),
+                                  drawLR[i].counts.data(),(GLsizei)drawLR[i].starts.size());
                 glDisableClientState(GL_VERTEX_ARRAY);
             }
-        };
-
-        // Draw current ornament
-        drawOrnament(lr, alphaOld);
-
-        // Draw target ornament fading in
-        if(morphing)
-            drawOrnament(lr2, alphaNew);
+        }
 
         glBindBuffer(GL_ARRAY_BUFFER,0);
 
