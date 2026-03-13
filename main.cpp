@@ -11,7 +11,7 @@ static const int   FFT_N = 1024;
 static const int   NUM_ORNAMENTS = 6;
 static const int   THUMB_SIZE = 56;      // thumbnail pixel size
 static const int   SIDEBAR_W  = 130;     // sidebar width in pixels
-static const int   THUMB_PAD  = 16;      // padding between thumbnails (room for name text)
+static const int   THUMB_PAD  = 24;      // padding between thumbnails (room for name text)
 
 // ============================================================
 // Color layers
@@ -977,7 +977,7 @@ int main(int argc,char*argv[]){
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,1);
 
     SDL_Window*win=SDL_CreateWindow("Ornament of Pressure",
-        SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,1024,1024,
+        SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,920,920,
         SDL_WINDOW_OPENGL|SDL_WINDOW_RESIZABLE|SDL_WINDOW_ALLOW_HIGHDPI);
     SDL_GLContext gl=SDL_GL_CreateContext(win);
     glewInit();SDL_GL_SetSwapInterval(1);
