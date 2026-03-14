@@ -977,7 +977,7 @@ int main(int argc,char*argv[]){
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,1);
 
     SDL_Window*win=SDL_CreateWindow("Ornament of Pressure",
-        SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,920,920,
+        SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,700,700,
         SDL_WINDOW_OPENGL|SDL_WINDOW_RESIZABLE|SDL_WINDOW_ALLOW_HIGHDPI);
     SDL_GLContext gl=SDL_GL_CreateContext(win);
     glewInit();SDL_GL_SetSwapInterval(1);
@@ -990,7 +990,7 @@ int main(int argc,char*argv[]){
     if(g_au.dev>0)SDL_PauseAudioDevice(g_au.dev,0);
 
     float sBass=.5f,sMid=.5f,sHigh=0,layerRot=0;
-    float sensitivity=1.0f;  // audio sensitivity: 0.1 .. 10.0, controlled by scroll/arrow keys
+    float sensitivity=4.0f;  // audio sensitivity: 0.1 .. 10.0, controlled by scroll/arrow keys
     Complex fftBuf[FFT_N];float hann[FFT_N];
     for(int i=0;i<FFT_N;i++)hann[i]=.5f*(1-cosf(2*PI*i/(FFT_N-1)));
 
@@ -1008,6 +1008,11 @@ int main(int argc,char*argv[]){
     std::vector<Vec2> layerSegs2[NUM_LAYERS];
     LayerRender lr2[NUM_LAYERS];
     LayerRender lrMorph[NUM_LAYERS]; // interpolated result
+
+    // Reveal animation — ornament paints outward from center
+    float revealRadius = 0;           // current reveal radius in pixels
+    static const float REVEAL_SPEED = 8.0f; // pixels per frame
+    bool revealing = true;            // true while reveal is growing
 
     // Pre-generate thumbnail geometry
     std::vector<Vec2> thumbGeom[NUM_ORNAMENTS];
@@ -1077,6 +1082,7 @@ int main(int argc,char*argv[]){
                 curOrnament=targetOrnament;
                 targetOrnament=-1;
                 morphT=0;
+                revealRadius=0; revealing=true; // restart reveal for new ornament
                 // Update window title with pattern name
                 std::string title = std::string("Ornament of Pressure — ") + ornamentNames[curOrnament];
                 SDL_SetWindowTitle(win, title.c_str());
@@ -1097,7 +1103,7 @@ int main(int argc,char*argv[]){
             sBass=sBass*.80f+bass*.20f;sMid=sMid*.82f+mid*.18f;sHigh=sHigh*.85f+high*.15f;
         }
 
-        float R0=340; // fixed size — audio drives geometry, not scale
+        float R0=306; // fixed size — audio drives geometry, not scale
         float depth=.08f+sBass*.25f;    // bass → star depth / breath amount
         float angle=20+sMid*50;          // mids → contact angle (pattern openness)
         layerRot+=sHigh*.012f+.001f;     // highs → rotation speed
@@ -1283,6 +1289,16 @@ int main(int argc,char*argv[]){
         // Fill alpha per layer — heavy white fills
         float fillAlpha[NUM_LAYERS] = { 0.55f, 0.40f, 0.48f, 0.35f, 0.50f, 0.55f, 0.30f };
 
+        // Advance reveal radius
+        float maxReveal = sqrtf((float)(wW*wW+wH*wH)); // diagonal
+        if(revealing){
+            revealRadius += REVEAL_SPEED;
+            if(revealRadius >= maxReveal) { revealRadius = maxReveal; revealing = false; }
+        }
+
+        float rcx = sidebarPx + (wW - sidebarPx) * 0.5f;
+        float rcy = wH * 0.5f;
+
         // If morphing, interpolate geometry; otherwise just draw current
         LayerRender* drawLR = lr;
         if(morphing){
@@ -1291,6 +1307,18 @@ int main(int argc,char*argv[]){
             morphLayers(lr, lr2, lrMorph, NUM_LAYERS, morphT, ocx, ocy);
             drawLR = lrMorph;
         }
+
+        // Helper: compute centroid distance from reveal center for a contour
+        auto contourDist = [&](const Vec2* verts, GLint start, GLsizei cnt) -> float {
+            float cx=0,cy=0;
+            for(int v=0;v<cnt;v++){cx+=verts[start+v].x;cy+=verts[start+v].y;}
+            cx/=cnt; cy/=cnt;
+            float dx=cx-rcx, dy=cy-rcy;
+            return sqrtf(dx*dx+dy*dy);
+        };
+
+        // Reveal fade band width (pixels)
+        float fadeBand = 40.0f;
 
         // Draw ornament (fills + lines)
         {
@@ -1315,6 +1343,12 @@ int main(int argc,char*argv[]){
                     GLsizei cnt=drawLR[i].counts[c];
                     if(cnt<3)continue;
 
+                    // Reveal: skip contours beyond reveal radius
+                    float dist=contourDist(drawLR[i].verts.data(),start,cnt);
+                    if(dist > revealRadius) continue;
+                    float revealAlpha = (revealRadius-dist < fadeBand) ?
+                        (revealRadius-dist)/fadeBand : 1.0f;
+
                     // Step 1: write stencil with triangle fan (invert bits)
                     glEnable(GL_STENCIL_TEST);
                     glClear(GL_STENCIL_BUFFER_BIT);
@@ -1328,7 +1362,7 @@ int main(int argc,char*argv[]){
                     glStencilFunc(GL_NOTEQUAL,0,0xFF);
                     glStencilOp(GL_KEEP,GL_KEEP,GL_KEEP);
                     glColor4f(baseColors[i].r*p*0.8f, baseColors[i].g*p*0.8f,
-                              baseColors[i].b*p*0.8f, fa);
+                              baseColors[i].b*p*0.8f, fa*revealAlpha);
                     // Draw a screen-filling quad (the stencil clips it)
                     glBindBuffer(GL_ARRAY_BUFFER,0);
                     glDisableClientState(GL_VERTEX_ARRAY);
@@ -1347,9 +1381,11 @@ int main(int argc,char*argv[]){
                 glDisableClientState(GL_VERTEX_ARRAY);
             }
 
-            // Pass 2: line outlines for ALL contours
+            // Pass 2: line outlines for ALL contours (with reveal)
             for(int i=0;i<NUM_LAYERS;i++){
                 if(drawLR[i].verts.empty())continue;
+                int nc=(int)drawLR[i].starts.size();
+
                 glBindBuffer(GL_ARRAY_BUFFER,vbo);
                 glBufferData(GL_ARRAY_BUFFER,drawLR[i].verts.size()*sizeof(Vec2),
                              drawLR[i].verts.data(),GL_STREAM_DRAW);
@@ -1357,10 +1393,18 @@ int main(int argc,char*argv[]){
                 glVertexPointer(2,GL_FLOAT,0,0);
 
                 float p=pulse[i];
-                glColor4f(baseColors[i].r*p, baseColors[i].g*p, baseColors[i].b*p, 1.0f);
                 glLineWidth(lw[i]);
-                glMultiDrawArrays(GL_LINE_LOOP,drawLR[i].starts.data(),
-                                  drawLR[i].counts.data(),(GLsizei)drawLR[i].starts.size());
+                // Draw each contour individually with reveal alpha
+                for(int c=0;c<nc;c++){
+                    GLint start=drawLR[i].starts[c];
+                    GLsizei cnt=drawLR[i].counts[c];
+                    float dist=contourDist(drawLR[i].verts.data(),start,cnt);
+                    if(dist > revealRadius) continue;
+                    float revealAlpha = (revealRadius-dist < fadeBand) ?
+                        (revealRadius-dist)/fadeBand : 1.0f;
+                    glColor4f(baseColors[i].r*p, baseColors[i].g*p, baseColors[i].b*p, revealAlpha);
+                    glDrawArrays(GL_LINE_LOOP,start,cnt);
+                }
                 glDisableClientState(GL_VERTEX_ARRAY);
             }
         }
